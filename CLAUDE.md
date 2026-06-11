@@ -8,22 +8,27 @@ ArenaQuiz es una app tipo Kahoot para encuestas en tiempo real: un admin crea un
 
 ## Stack y comandos
 
-- React 18 + Vite, Tailwind CSS, `@supabase/supabase-js` v2.
+- React 19 + Vite 8, Tailwind CSS v4 (vía `@tailwindcss/vite`, sin `tailwind.config.js`/`postcss.config.js`), `@supabase/supabase-js` v2.
 - `npm run dev` — servidor de desarrollo.
 - `npm run build` — build de producción (úsalo para verificar que compila).
-- No hay tests ni linter configurados.
+- `npm run test` — corre los tests con Vitest (modo run, no watch). `npm run test:watch` para modo watch.
+- No hay linter configurado.
+- CI: `.github/workflows/ci.yml` corre `npm ci`, `npm run test` y `npm run build` en push/PR a `main`.
 - Credenciales: `.env` con `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` (ver `.env.example`). Nunca commitear `.env`.
 
 ## Estructura
 
 ```
 src/
-  App.jsx            # TODA la app: flujos admin y participante, hooks, UI
-  supabaseClient.js  # cliente Supabase singleton
-  main.jsx           # entry point
-  index.css          # Tailwind + clases .input/.btn (@layer components)
+  App.jsx                # TODA la app: flujos admin y participante, hooks, UI
+  App.logic.test.jsx     # tests de generateRoomCode y useQuestionTimer (Vitest)
+  App.render.test.jsx    # tests de renderizado/navegación con supabase mockeado
+  setupTests.js          # setup de Vitest (@testing-library/jest-dom)
+  supabaseClient.js       # cliente Supabase singleton
+  main.jsx               # entry point
+  index.css              # @import "tailwindcss" + clases .input/.btn (@layer components)
 supabase/
-  schema.sql         # esquema completo de BD (ejecutar en SQL Editor de Supabase)
+  schema.sql             # esquema completo de BD (ejecutar en SQL Editor de Supabase)
 ```
 
 Convención deliberada: la app vive en un solo archivo `src/App.jsx`. No la dividas en múltiples archivos/carpetas de componentes salvo que el usuario lo pida.
@@ -63,3 +68,10 @@ waiting → open → closed → in_question ⇄ showing_results → finished
 - Estilos solo con Tailwind; las clases compartidas `.input` y `.btn` están en `index.css`.
 - Las letras A-D y sus colores viven en las constantes `LETTERS` y `LETTER_COLORS` de `App.jsx`; `options[i]` se corresponde con `LETTERS[i]`.
 - Si cambias el esquema de BD, actualiza `supabase/schema.sql` (es la referencia canónica; no hay migraciones).
+
+## Tests
+
+- `App.jsx` importa `supabaseClient.js` a nivel de módulo, que llama a `createClient`. Cualquier test que importe algo de `App.jsx` debe mockear `./supabaseClient` con `vi.mock(...)` para evitar el error de credenciales faltantes.
+- Funciones/hooks puros que se quieran testear unitariamente (p.ej. `generateRoomCode`, `useQuestionTimer`) deben exportarse con `export` desde `App.jsx`; sigue siendo un solo archivo, solo se exponen para los tests.
+- `useQuestionTimer` dispara `onTimeUp` en el mismo ciclo de efecto en que `timeLeft` llega a 0 (no un segundo después). Al testear con fake timers, usa un `act()` por cada `advanceTimersByTime` de 1s para que los `setTimeout` encadenados se procesen uno a uno.
+- Para tests de renderizado que toquen componentes con llamadas a Supabase (p.ej. `ParticipantApp` que hace `from('rooms').select()...` al montar), mockea `supabase.from()` devolviendo un query builder encadenable thenable (`select/eq/order/single/insert/update` devuelven el mismo objeto, y `.then()` resuelve `{ data, error }`), y `supabase.channel()` devolviendo un objeto con `on()`/`subscribe()` encadenables.

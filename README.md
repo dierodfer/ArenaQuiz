@@ -19,6 +19,15 @@ App tipo Kahoot para encuestas en tiempo real con React (Vite) + Supabase Realti
    npm run dev
    ```
 
+## Tests
+
+```bash
+npm run test       # corre los tests una vez (Vitest)
+npm run test:watch # modo watch
+```
+
+CI (`.github/workflows/ci.yml`) corre los tests y el build en cada push/PR a `main`.
+
 ## Uso
 
 - **Admin**: login con cualquier token → crea sala (código de 6 chars) → abre la sala → agrega preguntas → cierra la sala → "Comenzar". El timer del admin cierra cada pregunta automáticamente y muestra resultados; "Siguiente" avanza hasta el ranking final.
@@ -26,6 +35,7 @@ App tipo Kahoot para encuestas en tiempo real con React (Vite) + Supabase Realti
 
 ## Stack
 
-- React 18 + Vite
-- Tailwind CSS
+- React 19 + Vite 8
+- Tailwind CSS v4
 - @supabase/supabase-js v2 (Realtime `postgres_changes`)
+- Vitest + Testing Library

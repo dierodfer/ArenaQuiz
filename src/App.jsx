@@ -10,14 +10,14 @@ const LETTER_COLORS = {
   D: 'bg-green-600 hover:bg-green-500',
 }
 
-function generateRoomCode() {
+export function generateRoomCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
   return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
 }
 
 // Timer cliente: fase "lea" de 3s sin timer visible, luego cuenta atrás oficial.
 // Se reinicia cada vez que la sala entra en in_question o cambia de pregunta.
-function useQuestionTimer(room, onTimeUp) {
+export function useQuestionTimer(room, onTimeUp) {
   const [phase, setPhase] = useState('idle') // idle | reading | answering
   const [timeLeft, setTimeLeft] = useState(0)
   const firedRef = useRef(false)
