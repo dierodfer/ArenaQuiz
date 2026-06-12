@@ -67,6 +67,9 @@ function useRoomSubscription(roomId, setRoom) {
   }, [roomId])
 }
 
+// La pregunta actual se obtiene vía RPC: get_current_question oculta
+// correct_answer hasta que la sala entra en showing_results (RLS no permite
+// a los participantes leer la tabla questions directamente).
 function useCurrentQuestion(room) {
   const [question, setQuestion] = useState(null)
   useEffect(() => {
@@ -75,16 +78,14 @@ function useCurrentQuestion(room) {
       return
     }
     supabase
-      .from('questions')
-      .select('*')
-      .eq('room_id', room.id)
-      .eq('question_number', room.current_question_index)
-      .single()
-      .then(({ data }) => setQuestion(data))
-  }, [room?.id, room?.status === 'in_question' || room?.status === 'showing_results', room?.current_question_index])
+      .rpc('get_current_question', { p_room_id: room.id })
+      .then(({ data }) => setQuestion(data?.[0] ?? null))
+  }, [room?.id, room?.status, room?.current_question_index])
   return question
 }
 
+// % de acierto vía RPC: get_question_stats agrega answers sin exponer las
+// respuestas individuales (la tabla answers no es legible por participantes).
 function useQuestionStats(room, question) {
   const [stats, setStats] = useState(null)
   useEffect(() => {
@@ -93,12 +94,11 @@ function useQuestionStats(room, question) {
       return
     }
     supabase
-      .from('answers')
-      .select('is_correct')
-      .eq('question_id', question.id)
+      .rpc('get_question_stats', { p_question_id: question.id })
       .then(({ data }) => {
-        const total = data?.length ?? 0
-        const correct = data?.filter((a) => a.is_correct).length ?? 0
+        const row = data?.[0]
+        const total = row?.total ?? 0
+        const correct = row?.correct ?? 0
         setStats({ total, correct, pct: total ? Math.round((correct / total) * 100) : 0 })
       })
   }, [room?.status, question?.id])
@@ -138,65 +138,123 @@ function Ranking({ roomId, highlightId }) {
 // ---------- ADMIN ----------
 
 function AdminApp() {
-  const [token, setToken] = useState('')
-  const [loggedIn, setLoggedIn] = useState(false)
+  const [session, setSession] = useState(undefined) // undefined = cargando, null = sin sesión
   const [room, setRoom] = useState(null)
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session))
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession)
+    })
+    return () => listener.subscription.unsubscribe()
+  }, [])
+
+  if (session === undefined) {
+    return (
+      <Card title="🎯 ArenaQuiz">
+        <p className="text-center text-slate-400">Cargando...</p>
+      </Card>
+    )
+  }
+
+  if (!session) return <AdminAuth />
+  if (!room) return <CreateRoom session={session} setRoom={setRoom} />
+  return <AdminRoom room={room} setRoom={setRoom} />
+}
+
+function AdminAuth() {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [mode, setMode] = useState('signin') // signin | signup
+  const [message, setMessage] = useState('')
+
+  const submit = async () => {
+    setMessage('')
+    const { error } =
+      mode === 'signin'
+        ? await supabase.auth.signInWithPassword({ email, password })
+        : await supabase.auth.signUp({ email, password })
+    if (error) return setMessage(error.message)
+    if (mode === 'signup') {
+      setMessage('Cuenta creada. Revisa tu email para confirmar y luego inicia sesión.')
+    }
+  }
+
+  return (
+    <Card title={mode === 'signin' ? 'Admin · Iniciar sesión' : 'Admin · Crear cuenta'}>
+      <input
+        className="input"
+        type="email"
+        placeholder="Email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+      />
+      <input
+        className="input"
+        type="password"
+        placeholder="Contraseña"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+      />
+      {message && <p className="text-sm text-amber-400">{message}</p>}
+      <button className="btn" disabled={!email.trim() || !password.trim()} onClick={submit}>
+        {mode === 'signin' ? 'Entrar' : 'Crear cuenta'}
+      </button>
+      <button
+        className="btn bg-slate-700 hover:bg-slate-600"
+        onClick={() => {
+          setMode((m) => (m === 'signin' ? 'signup' : 'signin'))
+          setMessage('')
+        }}
+      >
+        {mode === 'signin' ? '¿No tienes cuenta? Crear una' : '¿Ya tienes cuenta? Iniciar sesión'}
+      </button>
+    </Card>
+  )
+}
+
+function CreateRoom({ session, setRoom }) {
   const [timePerQuestion, setTimePerQuestion] = useState(15)
 
-  if (!loggedIn) {
-    return (
-      <Card title="Admin · Login">
+  const createRoom = async () => {
+    const id = generateRoomCode()
+    const { data, error } = await supabase
+      .from('rooms')
+      .insert({
+        id,
+        admin_id: session.user.id,
+        status: 'waiting',
+        current_question_index: 0,
+        time_per_question: timePerQuestion,
+      })
+      .select()
+      .single()
+    if (error) return alert(error.message)
+    setRoom(data)
+  }
+
+  return (
+    <Card title="Crear sala">
+      <p className="text-sm text-slate-400 text-center">{session.user.email}</p>
+      <label className="block text-sm">
+        Segundos por pregunta (10-15)
         <input
+          type="number"
+          min="10"
+          max="15"
           className="input"
-          placeholder="Token (cualquier string)"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
+          value={timePerQuestion}
+          onChange={(e) => setTimePerQuestion(Number(e.target.value))}
         />
-        <button className="btn" disabled={!token.trim()} onClick={() => setLoggedIn(true)}>
-          Entrar
-        </button>
-      </Card>
-    )
-  }
-
-  if (!room) {
-    const createRoom = async () => {
-      const id = generateRoomCode()
-      const { data, error } = await supabase
-        .from('rooms')
-        .insert({
-          id,
-          admin_id: token,
-          status: 'waiting',
-          current_question_index: 0,
-          time_per_question: timePerQuestion,
-        })
-        .select()
-        .single()
-      if (error) return alert(error.message)
-      setRoom(data)
-    }
-    return (
-      <Card title="Crear sala">
-        <label className="block text-sm">
-          Segundos por pregunta (10-15)
-          <input
-            type="number"
-            min="10"
-            max="15"
-            className="input"
-            value={timePerQuestion}
-            onChange={(e) => setTimePerQuestion(Number(e.target.value))}
-          />
-        </label>
-        <button className="btn" onClick={createRoom}>
-          Crear sala
-        </button>
-      </Card>
-    )
-  }
-
-  return <AdminRoom room={room} setRoom={setRoom} />
+      </label>
+      <button className="btn" onClick={createRoom}>
+        Crear sala
+      </button>
+      <button className="btn bg-slate-700 hover:bg-slate-600" onClick={() => supabase.auth.signOut()}>
+        Cerrar sesión
+      </button>
+    </Card>
+  )
 }
 
 function AdminRoom({ room, setRoom }) {
@@ -530,20 +588,17 @@ function ParticipantRoom({ room, setRoom, participant }) {
 
   const answer = async (letter) => {
     if (myAnswer || !question) return
-    const isCorrect = letter === question.correct_answer
-    setMyAnswer({ answer: letter, is_correct: isCorrect })
-    const { error } = await supabase.from('answers').insert({
-      question_id: question.id,
-      participant_id: participant.id,
-      answer: letter,
-      is_correct: isCorrect,
+    // El servidor decide si es correcta y actualiza el score (submit_answer);
+    // el cliente nunca calcula is_correct ni el nuevo score.
+    const { data, error } = await supabase.rpc('submit_answer', {
+      p_question_id: question.id,
+      p_participant_id: participant.id,
+      p_answer: letter,
     })
-    if (error) return
-    if (isCorrect) {
-      const newScore = score + 100
-      setScore(newScore)
-      await supabase.from('participants').update({ score: newScore }).eq('id', participant.id)
-    }
+    if (error) return alert(error.message)
+    const result = data?.[0]
+    setMyAnswer({ answer: letter, is_correct: result?.is_correct ?? false })
+    if (result) setScore(result.new_score)
   }
 
   const disabled = phase !== 'answering' || timeLeft <= 0 || !!myAnswer

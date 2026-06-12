@@ -35,12 +35,25 @@ Convención deliberada: la app vive en un solo archivo `src/App.jsx`. No la divi
 
 ## Modelo de datos (4 tablas)
 
-- `rooms`: `id` (texto, código de 6 chars generado en cliente), `admin_id`, `status`, `current_question_index`, `time_per_question`.
+- `rooms`: `id` (texto, código de 6 chars generado en cliente), `admin_id` (uuid, FK a `auth.users`), `status`, `current_question_index`, `time_per_question`.
 - `participants`: FK a room, `username`, `score`.
 - `questions`: FK a room, `question_number` (0-based, igual a `current_question_index`), `title`, `options` (jsonb, array de 4 textos), `correct_answer` (letra A-D).
 - `answers`: FK a question y participant, `answer` (letra), `is_correct`. Unique por (question_id, participant_id).
 
-RLS está deshabilitado a propósito (prototipo sin auth real; el "token" de admin es cualquier string). Las tablas `rooms`, `participants` y `answers` están en la publicación `supabase_realtime`.
+Las tablas `rooms`, `participants` y `answers` están en la publicación `supabase_realtime`.
+
+## Autenticación y RLS (crítico)
+
+- El admin se autentica con **Supabase Auth (email + contraseña)**; `rooms.admin_id = auth.uid()`. Los participantes NO tienen cuenta (solo username), tal como pide el flujo simple.
+- RLS está **habilitado** en las 4 tablas (ver `supabase/schema.sql`):
+  - `rooms`/`participants`: SELECT abierto a todos (lobby, ranking). `rooms` solo se puede INSERT/UPDATE si `admin_id = auth.uid()`. `participants` solo se puede INSERT si la sala está `open`.
+  - `questions`/`answers`: solo legibles/escribibles por el admin dueño de la sala (vía join a `rooms.admin_id = auth.uid()`). Los participantes nunca leen estas tablas directamente.
+- Los participantes acceden a la pregunta y a las estadísticas vía **funciones RPC** (`security definer`, bypasean RLS de forma controlada):
+  - `get_current_question(p_room_id)`: devuelve la pregunta actual; `correct_answer` viene `null` salvo cuando `status = 'showing_results'`.
+  - `get_question_stats(p_question_id)`: devuelve `{ total, correct }` agregados, sin exponer respuestas individuales.
+  - `submit_answer(p_question_id, p_participant_id, p_answer)`: inserta la respuesta, calcula `is_correct` en el servidor y suma +100 al score si es correcta de forma atómica. El cliente nunca decide si acertó ni el nuevo score.
+- `useCurrentQuestion` y `useQuestionStats` (compartidos por admin y participante) llaman siempre a estas RPC, no a las tablas directamente. El admin sigue leyendo `questions`/`answers` directamente solo en `QuestionForm` y en el tally en vivo de `AdminRoom` (permitido por RLS al ser el dueño).
+- Si añades nuevas queries desde el cliente, comprueba si necesitan política RLS nueva en `schema.sql` o si deben pasar por una función `security definer`.
 
 ## Máquina de estados de la sala (crítico)
 
@@ -60,7 +73,7 @@ waiting → open → closed → in_question ⇄ showing_results → finished
 - El admin además escucha INSERTs en `participants` (lobby en vivo) e INSERTs en `answers` filtrados por la pregunta actual (respuestas en vivo). El canal de answers se recrea por pregunta.
 - El timer es 100% cliente (`useQuestionTimer`): al entrar en `in_question` hay 3s de fase "lea" (sin timer visible, opciones deshabilitadas) y después la cuenta atrás oficial de `time_per_question` segundos.
 - Solo el timer del admin tiene efectos: al llegar a 0 actualiza `status = 'showing_results'`. El timer del participante es puramente visual; cuando llega a 0 solo deshabilita las opciones y espera el evento.
-- `is_correct` y el score (+100 por acierto) se calculan en el cliente del participante al responder. El % de acierto se calcula consultando `answers` al entrar en `showing_results`.
+- `is_correct` y el score (+100 por acierto) se calculan en el servidor (`submit_answer` RPC). El % de acierto se obtiene de `get_question_stats` al entrar en `showing_results`.
 
 ## Convenciones
 
