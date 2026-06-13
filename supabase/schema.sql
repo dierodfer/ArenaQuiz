@@ -49,6 +49,25 @@ create table answers (
 );
 
 -- ============================================================
+-- Permisos de tabla
+-- ============================================================
+-- Las políticas RLS de más abajo controlan QUÉ filas son visibles/editables,
+-- pero antes de eso Postgres exige permisos a nivel de tabla para los roles
+-- anon/authenticated (si no existen, el error es "permission denied for
+-- table ..." en vez de "violates row-level security policy").
+
+grant usage on schema public to anon, authenticated;
+
+grant select on rooms to anon, authenticated;
+grant insert, update on rooms to authenticated;
+
+grant select, insert on participants to anon, authenticated;
+
+grant select, insert on questions to authenticated;
+
+grant select on answers to authenticated;
+
+-- ============================================================
 -- Row Level Security
 -- ============================================================
 -- El admin se autentica con Supabase Auth (email + contraseña) y solo puede
