@@ -12,7 +12,7 @@
 -- ============================================================
 -- Limpieza
 -- ============================================================
-drop table if exists answers, questions, participants, rooms cascade;
+drop table if exists answers, room_questions, questions, participants, rooms cascade;
 
 drop function if exists get_current_question(text);
 drop function if exists get_question_stats(uuid);
@@ -44,16 +44,35 @@ create table participants (
 -- table scan que empeora a medida que se acumulan sesiones.
 create index participants_room_id_idx on participants (room_id);
 
+-- questions: banco de preguntas del admin, independiente de las salas.
+-- Una pregunta se crea una vez y puede reutilizarse en cualquier sala propia
+-- a través de room_questions.
 create table questions (
   id uuid primary key default gen_random_uuid(),
-  room_id text not null references rooms(id) on delete cascade,
-  question_number int not null,
+  admin_id uuid not null references auth.users(id) on delete cascade,
+  category text not null default 'General',
   title text not null,
   correct_answer text not null check (correct_answer in ('A', 'B', 'C', 'D')),
   options jsonb not null, -- ["texto A", "texto B", "texto C", "texto D"]
-  created_at timestamptz not null default now(),
-  unique (room_id, question_number)
+  created_at timestamptz not null default now()
 );
+
+-- Consultada para listar/filtrar el banco de preguntas de un admin por categoría.
+create index questions_admin_id_idx on questions (admin_id);
+
+-- room_questions: preguntas del banco elegidas para una sala concreta, con el
+-- orden en que se presentan (question_number, 0-based, igual a
+-- rooms.current_question_index).
+create table room_questions (
+  id uuid primary key default gen_random_uuid(),
+  room_id text not null references rooms(id) on delete cascade,
+  question_id uuid not null references questions(id) on delete cascade,
+  question_number int not null,
+  unique (room_id, question_number),
+  unique (room_id, question_id)
+);
+
+create index room_questions_room_id_idx on room_questions (room_id);
 
 create table answers (
   id uuid primary key default gen_random_uuid(),
@@ -81,7 +100,9 @@ grant insert, update on rooms to authenticated;
 grant select on participants to anon, authenticated;
 grant insert on participants to anon;
 
-grant select, insert on questions to authenticated;
+grant select, insert, update, delete on questions to authenticated;
+
+grant select, insert on room_questions to authenticated;
 
 grant select on answers to authenticated;
 
@@ -89,14 +110,15 @@ grant select on answers to authenticated;
 -- Row Level Security
 -- ============================================================
 -- El admin se autentica con Supabase Auth (email + contraseña) y solo puede
--- gestionar las salas que creó (admin_id = auth.uid()). Los participantes
--- son anónimos: pueden unirse a salas abiertas y responder, pero no pueden
--- leer correct_answer ni modificar scores directamente; eso pasa por las
--- funciones RPC de más abajo (SECURITY DEFINER).
+-- gestionar las salas y preguntas que creó (admin_id = auth.uid()). Los
+-- participantes son anónimos: pueden unirse a salas abiertas y responder,
+-- pero no pueden leer correct_answer ni modificar scores directamente; eso
+-- pasa por las funciones RPC de más abajo (SECURITY DEFINER).
 
 alter table rooms enable row level security;
 alter table participants enable row level security;
 alter table questions enable row level security;
+alter table room_questions enable row level security;
 alter table answers enable row level security;
 
 -- rooms: visibles para todos (lobby de salas abiertas); solo el admin dueño
@@ -125,33 +147,54 @@ create policy "participants_insert_if_room_open" on participants
     exists (select 1 from rooms where rooms.id = participants.room_id and rooms.status = 'open')
   );
 
--- questions: solo el admin dueño de la sala puede leer/crear preguntas
--- (incluye correct_answer). Los participantes obtienen la pregunta actual,
--- sin correct_answer hasta showing_results, vía get_current_question().
-create policy "questions_select_own_room" on questions
+-- questions: banco de preguntas privado de cada admin (CRUD completo sobre
+-- las suyas). Los participantes nunca leen esta tabla directamente; obtienen
+-- la pregunta actual, sin correct_answer hasta showing_results, vía
+-- get_current_question().
+create policy "questions_select_own" on questions
   for select to authenticated
-  using (exists (select 1 from rooms where rooms.id = questions.room_id and rooms.admin_id = auth.uid()));
+  using (admin_id = auth.uid());
 
-create policy "questions_insert_own_room" on questions
+create policy "questions_insert_own" on questions
   for insert to authenticated
-  with check (exists (select 1 from rooms where rooms.id = questions.room_id and rooms.admin_id = auth.uid()));
+  with check (admin_id = auth.uid());
 
--- answers: solo el admin dueño puede leer las respuestas en bruto (tally en
--- vivo). El % de acierto para todos sale de get_question_stats(). No hay
--- policy de insert: solo se escribe vía submit_answer().
-create policy "answers_select_own_room" on answers
+create policy "questions_update_own" on questions
+  for update to authenticated
+  using (admin_id = auth.uid())
+  with check (admin_id = auth.uid());
+
+create policy "questions_delete_own" on questions
+  for delete to authenticated
+  using (admin_id = auth.uid());
+
+-- room_questions: el admin dueño de la sala asigna preguntas de su propio
+-- banco al crearla.
+create policy "room_questions_select_own_room" on room_questions
   for select to authenticated
-  using (exists (
-    select 1 from questions q
-    join rooms r on r.id = q.room_id
-    where q.id = answers.question_id and r.admin_id = auth.uid()
-  ));
+  using (exists (select 1 from rooms where rooms.id = room_questions.room_id and rooms.admin_id = auth.uid()));
+
+create policy "room_questions_insert_own_room" on room_questions
+  for insert to authenticated
+  with check (
+    exists (select 1 from rooms where rooms.id = room_questions.room_id and rooms.admin_id = auth.uid())
+    and exists (select 1 from questions where questions.id = room_questions.question_id and questions.admin_id = auth.uid())
+  );
+
+-- answers: solo el admin dueño de la pregunta puede leer las respuestas en
+-- bruto (tally en vivo). El % de acierto para todos sale de
+-- get_question_stats(). No hay policy de insert: solo se escribe vía
+-- submit_answer().
+create policy "answers_select_own" on answers
+  for select to authenticated
+  using (exists (select 1 from questions where questions.id = answers.question_id and questions.admin_id = auth.uid()));
 
 -- ============================================================
 -- Funciones RPC
 -- ============================================================
 
--- Pregunta actual de una sala. Oculta correct_answer salvo en showing_results.
+-- Pregunta actual de una sala (vía room_questions). Oculta correct_answer
+-- salvo en showing_results.
 create or replace function get_current_question(p_room_id text)
 returns table (
   id uuid,
@@ -167,10 +210,11 @@ set search_path = public
 stable
 as $$
   select
-    q.id, q.room_id, q.question_number, q.title, q.options,
+    q.id, rq.room_id, rq.question_number, q.title, q.options,
     case when r.status = 'showing_results' then q.correct_answer else null end
   from rooms r
-  join questions q on q.room_id = r.id and q.question_number = r.current_question_index
+  join room_questions rq on rq.room_id = r.id and rq.question_number = r.current_question_index
+  join questions q on q.id = rq.question_id
   where r.id = p_room_id;
 $$;
 

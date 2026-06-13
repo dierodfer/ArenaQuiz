@@ -15,6 +15,7 @@ function createQueryBuilder(data = []) {
   builder.single = vi.fn(chain)
   builder.insert = vi.fn(chain)
   builder.update = vi.fn(chain)
+  builder.delete = vi.fn(chain)
   builder.then = (resolve) => Promise.resolve({ data, error: null }).then(resolve)
   return builder
 }
@@ -66,7 +67,7 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: 'Crear cuenta' })).not.toBeInTheDocument()
   })
 
-  it('flujo admin con sesión activa: muestra la pantalla de crear sala', async () => {
+  it('flujo admin con sesión activa: muestra el menú (crear sala / banco / salir)', async () => {
     vi.mocked(supabase.auth.getSession).mockResolvedValue({
       data: { session: { user: { id: 'admin-uid', email: 'admin@example.com' } } },
     })
@@ -77,7 +78,25 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: 'Soy Admin' }))
 
     expect(await screen.findByRole('button', { name: 'Crear sala' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Banco de preguntas' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Cerrar sesión' })).toBeInTheDocument()
     expect(screen.getByText('admin@example.com')).toBeInTheDocument()
+  })
+
+  it('flujo admin: desde el menú se navega al banco de preguntas', async () => {
+    vi.mocked(supabase.auth.getSession).mockResolvedValue({
+      data: { session: { user: { id: 'admin-uid', email: 'admin@example.com' } } },
+    })
+
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: 'Soy Admin' }))
+    await user.click(await screen.findByRole('button', { name: 'Banco de preguntas' }))
+
+    expect(await screen.findByText('Banco de preguntas')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Categoría (p.ej. Historia)')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Guardar pregunta' })).toBeInTheDocument()
   })
 
   it('flujo participante: muestra el formulario para unirse a una sala', async () => {
