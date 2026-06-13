@@ -1,61 +1,30 @@
 # ArenaQuiz
 
-App tipo Kahoot para encuestas en tiempo real con React (Vite) + Supabase Realtime.
+App tipo Kahoot para hacer encuestas y quizzes en tiempo real, ideal para jugar en grupo desde el móvil o el ordenador.
 
-## Setup
+🔗 **Jugar ahora**: https://dierodfer.github.io/ArenaQuiz/
 
-1. Crea un proyecto en [Supabase](https://supabase.com) y ejecuta `supabase/schema.sql` en el SQL Editor (crea tablas, políticas RLS y las funciones RPC).
-2. **Authentication → Sign In / Providers**:
-   - Desactiva **"Allow new users to sign up"** (sección "User Signups"). No hay auto-registro: las cuentas de admin se crean manualmente (ver sección "Administradores" más abajo).
-   - Deja **"Confirm email"** activado (valor por defecto).
-3. Copia las credenciales:
+## Cómo jugar
 
-   ```bash
-   cp .env.example .env
-   # Rellena VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY (Settings → API)
-   ```
+### Participante
 
-4. Instala y arranca:
+1. Abre el enlace de arriba y pulsa **"Soy Participante"**.
+2. Escribe tu nombre.
+3. Únete con el código de 6 caracteres que te dé el organizador, o elige una sala abierta de la lista.
+4. Cuando empiece cada pregunta, responde **A/B/C/D** lo más rápido posible: acertar suma puntos.
+5. Al final de la partida verás el ranking con las puntuaciones de todos.
 
-   ```bash
-   npm install
-   npm run dev
-   ```
+### Organizador (admin)
 
-## Tests
+El acceso de admin no es de alta libre: pide una cuenta a quien gestiona el proyecto.
 
-```bash
-npm run test       # corre los tests una vez (Vitest)
-npm run test:watch # modo watch
-```
+1. Pulsa **"Soy Admin"** e inicia sesión con tu email y contraseña.
+2. Crea una sala: te dará un código de 6 caracteres para compartir con los participantes.
+3. Ábrela para que la gente se vaya uniendo y añade las preguntas (4 opciones + la respuesta correcta).
+4. Cuando todos estén dentro, cierra la sala y pulsa **"Comenzar"**.
+5. Cada pregunta tiene un temporizador; al acabar se muestran los resultados y el % de acierto.
+6. **"Siguiente"** avanza a la próxima pregunta; al terminar todas se muestra el ranking final.
 
-CI (`.github/workflows/ci.yml`) corre los tests y el build en cada push/PR a `main`.
+## Más información
 
-## Administradores
-
-No hay auto-registro: el toggle "Allow new users to sign up" debe estar desactivado en Supabase. Para dar acceso de admin a alguien:
-
-1. **Authentication → Users → "Add user"** en el dashboard de Supabase.
-2. Introduce su email y una contraseña.
-3. Marca **"Auto Confirm User"** para que quede activo de inmediato (sin email de confirmación).
-
-Esa persona ya puede entrar en "Soy Admin" → login con esas credenciales y crear sus propias salas.
-
-## Uso
-
-- **Admin**: inicia sesión con email + contraseña (cuenta creada por el dueño del proyecto, ver arriba) → crea sala (código de 6 chars) → abre la sala → agrega preguntas → cierra la sala → "Comenzar". El timer del admin cierra cada pregunta automáticamente y muestra resultados; "Siguiente" avanza hasta el ranking final. Solo el dueño de la sala (`admin_id = auth.uid()`) puede gestionarla.
-- **Participante**: pone su nombre (sin cuenta) → entra con código o desde la lista de salas abiertas (solo si la sala está `open`) → responde A/B/C/D cuando el timer está activo. El servidor valida la respuesta y calcula el score (no el cliente). Todo se sincroniza por eventos Realtime de Supabase.
-
-## Seguridad
-
-- RLS está habilitado en las 4 tablas; los participantes (anónimos) solo pueden leer/escribir lo mínimo necesario (ver sección "Autenticación y RLS" en `CLAUDE.md`).
-- La pregunta correcta (`correct_answer`) y las respuestas de otros nunca llegan al cliente del participante antes de `showing_results`: se obtienen mediante funciones RPC que filtran esos datos en el servidor.
-- Si despliegas en GitHub Pages u otro hosting estático, recuerda añadir esa URL en **Authentication → URL Configuration → Site URL / Redirect URLs** de Supabase para que los enlaces de confirmación de email funcionen.
-- El registro de admins está cerrado ("Allow new users to sign up" = OFF); solo el dueño del proyecto Supabase puede crear cuentas de admin (ver "Administradores").
-
-## Stack
-
-- React 19 + Vite 8
-- Tailwind CSS v4
-- @supabase/supabase-js v2 (Realtime `postgres_changes`)
-- Vitest + Testing Library
+Para desarrollo, configuración y despliegue, consulta [DEVELOPMENT.md](./DEVELOPMENT.md).
