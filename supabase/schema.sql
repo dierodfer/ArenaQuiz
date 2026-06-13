@@ -61,7 +61,8 @@ grant usage on schema public to anon, authenticated;
 grant select on rooms to anon, authenticated;
 grant insert, update on rooms to authenticated;
 
-grant select, insert on participants to anon, authenticated;
+grant select on participants to anon, authenticated;
+grant insert on participants to anon;
 
 grant select, insert on questions to authenticated;
 
