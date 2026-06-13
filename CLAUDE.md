@@ -14,7 +14,7 @@ ArenaQuiz es una app tipo Kahoot para encuestas en tiempo real: un admin crea un
 - `npm run test` — corre los tests con Vitest (modo run, no watch). `npm run test:watch` para modo watch.
 - No hay linter configurado.
 - CI: `.github/workflows/ci.yml` corre `npm ci`, `npm run test` y `npm run build` en push/PR a `main`.
-- Credenciales: `.env` con `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` (ver `.env.example`). Nunca commitear `.env`.
+- Credenciales: `.env` con `VITE_SUPABASE_URL` y `VITE_SUPABASE_PUBLISHABLE_KEY` (ver `.env.example`). Nunca commitear `.env`.
 
 ## Estructura
 

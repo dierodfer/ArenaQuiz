@@ -15,7 +15,7 @@ if (!hasSupabaseCredentials) {
         <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:.75rem">⚠️ Configuración incompleta</h1>
         <p style="color:#94a3b8;line-height:1.5">
           Faltan las credenciales de Supabase. Si gestionas este sitio, define
-          <code>VITE_SUPABASE_URL</code> y <code>VITE_SUPABASE_ANON_KEY</code> y vuelve a desplegar.
+          <code>VITE_SUPABASE_URL</code> y <code>VITE_SUPABASE_PUBLISHABLE_KEY</code> y vuelve a desplegar.
         </p>
       </div>
     </div>

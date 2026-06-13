@@ -32,14 +32,14 @@ jobs:
       - name: Verify Supabase secrets are set
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
         run: |
           missing=0
           if [ -z "$VITE_SUPABASE_URL" ]; then
             echo "::error::Falta el secret VITE_SUPABASE_URL"; missing=1
           fi
-          if [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
-            echo "::error::Falta el secret VITE_SUPABASE_ANON_KEY"; missing=1
+          if [ -z "$VITE_SUPABASE_PUBLISHABLE_KEY" ]; then
+            echo "::error::Falta el secret VITE_SUPABASE_PUBLISHABLE_KEY"; missing=1
           fi
           if [ "$missing" -ne 0 ]; then
             echo "Configúralos en Settings → Secrets and variables → Actions y vuelve a lanzar el deploy."
@@ -50,7 +50,7 @@ jobs:
         env:
           GITHUB_PAGES: true
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
 
       - uses: actions/upload-pages-artifact@v3
         with:

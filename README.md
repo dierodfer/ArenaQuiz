@@ -12,7 +12,7 @@ App tipo Kahoot para encuestas en tiempo real con React (Vite) + Supabase Realti
 
    ```bash
    cp .env.example .env
-   # Rellena VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY (Settings → API)
+   # Rellena VITE_SUPABASE_URL y VITE_SUPABASE_PUBLISHABLE_KEY (Settings → API Keys)
    ```
 
 4. Instala y arranca:
