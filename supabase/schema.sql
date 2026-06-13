@@ -4,6 +4,23 @@
 -- Requiere autenticación por email/contraseña habilitada
 -- (Authentication → Providers → Email). El admin se identifica con
 -- auth.users; los participantes no requieren cuenta.
+--
+-- Este script es idempotente: primero elimina las tablas y funciones si ya
+-- existen (CASCADE se lleva índices, policies y triggers asociados) y luego
+-- recrea todo desde cero.
+
+-- ============================================================
+-- Limpieza
+-- ============================================================
+drop table if exists answers, questions, participants, rooms cascade;
+
+drop function if exists get_current_question(text);
+drop function if exists get_question_stats(uuid);
+drop function if exists submit_answer(uuid, uuid, text);
+
+-- ============================================================
+-- Tablas
+-- ============================================================
 
 create table rooms (
   id text primary key, -- código de 6 chars generado en cliente
