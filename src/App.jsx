@@ -1,5 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from './supabaseClient'
+// Listas públicas de palabras ofensivas (paquete `naughty-words`). Viven en
+// node_modules, no en este repo. Importamos solo es+en para no inflar el bundle.
+import esBadWords from 'naughty-words/es.json'
+import enBadWords from 'naughty-words/en.json'
 
 const READ_SECONDS = 3
 const LETTERS = ['A', 'B', 'C', 'D']
@@ -17,12 +21,36 @@ export function generateRoomCode() {
 
 const USERNAME_MIN_LENGTH = 3
 
+// Marcas diacríticas combinantes (acentos) en Unicode, para poder quitarlas.
+const DIACRITICS = new RegExp('[\\u0300-\\u036f]', 'g')
+
+// Minúsculas y sin acentos, para comparar contra la lista negra.
+function normalizeForMatch(str) {
+  return str.toLowerCase().normalize('NFD').replace(DIACRITICS, '')
+}
+
+// Lista negra normalizada (es + en). Solo palabras de 3+ letras para evitar
+// falsos positivos triviales.
+const USERNAME_BLACKLIST = new Set(
+  [...esBadWords, ...enBadWords]
+    .map((w) => normalizeForMatch(w).replace(/[^a-z]+/g, ''))
+    .filter((w) => w.length >= USERNAME_MIN_LENGTH),
+)
+
 // Valida el nombre del participante. Devuelve un mensaje de error o null si es
-// válido. El filtro de palabras ofensivas (blacklist) se añade aquí.
+// válido. Bloquea si el nombre entero (sin separadores) o alguno de sus tokens
+// coincide exactamente con una palabra de la lista negra; el match exacto evita
+// bloquear nombres legítimos que contengan una mala palabra (p.ej. "Mariano").
 export function validateUsername(name) {
   const trimmed = name.trim()
   if (trimmed.length < USERNAME_MIN_LENGTH) {
     return `El nombre debe tener al menos ${USERNAME_MIN_LENGTH} caracteres.`
+  }
+  const normalized = normalizeForMatch(trimmed)
+  const collapsed = normalized.replace(/[^a-z]+/g, '')
+  const tokens = normalized.split(/[^a-z]+/).filter(Boolean)
+  if (USERNAME_BLACKLIST.has(collapsed) || tokens.some((t) => USERNAME_BLACKLIST.has(t))) {
+    return 'Ese nombre no está permitido. Elige otro.'
   }
   return null
 }

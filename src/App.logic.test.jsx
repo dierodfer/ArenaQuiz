@@ -30,6 +30,18 @@ describe('validateUsername', () => {
     expect(validateUsername('ana')).toBeNull()
     expect(validateUsername('  Pedro ')).toBeNull()
   })
+
+  it('rechaza palabras ofensivas (es) ignorando mayúsculas, acentos y dígitos', () => {
+    expect(validateUsername('puta')).toBeTruthy()
+    expect(validateUsername('Mierda')).toBeTruthy()
+    expect(validateUsername('puta69')).toBeTruthy()
+    expect(validateUsername('soy puta')).toBeTruthy()
+  })
+
+  it('no bloquea nombres legítimos que contienen una mala palabra como subcadena', () => {
+    expect(validateUsername('Mariano')).toBeNull()
+    expect(validateUsername('Calculo')).toBeNull()
+  })
 })
 
 describe('useQuestionTimer', () => {
