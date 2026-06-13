@@ -145,6 +145,57 @@ function useQuestionStats(room, question) {
   return stats
 }
 
+// Barra de progreso del temporizador. Acompaña a la cuenta atrás numérica
+// durante la fase "answering"; se vacía a medida que se agota el tiempo.
+function TimerBar({ phase, timeLeft, total }) {
+  if (phase !== 'answering') return null
+  const pct = total ? Math.max(0, Math.min(100, (timeLeft / total) * 100)) : 0
+  return (
+    <div className="h-2 w-full bg-slate-700 rounded overflow-hidden" aria-hidden="true">
+      <div
+        className="h-full bg-indigo-500 transition-all duration-1000 ease-linear"
+        style={{ width: `${pct}%` }}
+      />
+    </div>
+  )
+}
+
+// Desglose por opción: muestra el texto de cada respuesta posible y, justo
+// debajo, el porcentaje y el número de respuestas recibidas. Si showCorrect,
+// resalta la opción correcta.
+function AnswerBreakdown({ question, answers, showCorrect }) {
+  const total = answers.length
+  return (
+    <div className="space-y-2">
+      {question.options.map((opt, i) => {
+        const letter = LETTERS[i]
+        const count = answers.filter((a) => a.answer === letter).length
+        const pct = total ? Math.round((count / total) * 100) : 0
+        const isCorrect = showCorrect && question.correct_answer === letter
+        return (
+          <div
+            key={letter}
+            className={`rounded p-2 ${isCorrect ? 'bg-slate-800 ring-2 ring-green-400' : 'bg-slate-800'}`}
+          >
+            <div className="flex justify-between gap-2">
+              <span>
+                <span className="font-bold">{letter}.</span> {opt}
+              </span>
+              {isCorrect && <span className="text-green-400">✔</span>}
+            </div>
+            <div className="text-sm text-slate-400">
+              {pct}% · {count} {count === 1 ? 'respuesta' : 'respuestas'}
+            </div>
+            <div className="h-1.5 bg-slate-700 rounded mt-1 overflow-hidden">
+              <div className="h-full bg-indigo-500 rounded" style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function Ranking({ roomId, highlightId }) {
   const [rows, setRows] = useState([])
   useEffect(() => {
@@ -180,6 +231,7 @@ function Ranking({ roomId, highlightId }) {
 function AdminApp() {
   const [session, setSession] = useState(undefined) // undefined = cargando, null = sin sesión
   const [room, setRoom] = useState(null)
+  const [view, setView] = useState('menu') // menu | create | bank
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session))
@@ -198,8 +250,12 @@ function AdminApp() {
   }
 
   if (!session) return <AdminAuth />
-  if (!room) return <CreateRoom session={session} setRoom={setRoom} />
-  return <AdminRoom room={room} setRoom={setRoom} />
+  if (room) return <AdminRoom room={room} setRoom={setRoom} onExit={() => { setRoom(null); setView('menu') }} />
+  if (view === 'create') {
+    return <CreateRoom session={session} setRoom={setRoom} onBack={() => setView('menu')} />
+  }
+  if (view === 'bank') return <QuestionBank session={session} onBack={() => setView('menu')} />
+  return <AdminMenu session={session} onCreate={() => setView('create')} onBank={() => setView('bank')} />
 }
 
 function AdminAuth() {
@@ -247,12 +303,203 @@ function AdminAuth() {
   )
 }
 
-function CreateRoom({ session, setRoom }) {
+// Menú principal del admin tras iniciar sesión.
+function AdminMenu({ session, onCreate, onBank }) {
+  return (
+    <Card title="🎯 ArenaQuiz · Admin">
+      <p className="text-sm text-slate-400 text-center">{session.user.email}</p>
+      <button className="btn" onClick={onCreate}>
+        Crear sala
+      </button>
+      <button className="btn bg-purple-600 hover:bg-purple-500" onClick={onBank}>
+        Banco de preguntas
+      </button>
+      <button
+        className="btn bg-slate-700 hover:bg-slate-600"
+        onClick={() => supabase.auth.signOut()}
+      >
+        Cerrar sesión
+      </button>
+    </Card>
+  )
+}
+
+// Banco de preguntas: las preguntas se crean aquí, independientes de cualquier
+// sala, y se etiquetan con una categoría de texto libre. Luego se eligen al
+// crear una sala (ver CreateRoom).
+function QuestionBank({ session, onBack }) {
+  const [questions, setQuestions] = useState([])
+  const [title, setTitle] = useState('')
+  const [options, setOptions] = useState(['', '', '', ''])
+  const [correct, setCorrect] = useState('A')
+  const [category, setCategory] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    supabase
+      .from('questions')
+      .select('*')
+      .eq('admin_id', session.user.id)
+      .order('category')
+      .order('created_at')
+      .then(({ data }) => setQuestions(data ?? []))
+  }, [])
+
+  const categories = [...new Set(questions.map((q) => q.category))].sort()
+  const valid = title.trim() && options.every((o) => o.trim()) && category.trim()
+
+  const addQuestion = async () => {
+    setError('')
+    if (!valid) return
+    const { data, error: insErr } = await supabase
+      .from('questions')
+      .insert({
+        admin_id: session.user.id,
+        category: category.trim(),
+        title: title.trim(),
+        options,
+        correct_answer: correct,
+      })
+      .select()
+      .single()
+    if (insErr) return setError(insErr.message)
+    setQuestions((prev) => [...prev, data])
+    setTitle('')
+    setOptions(['', '', '', ''])
+    setCorrect('A')
+  }
+
+  const removeQuestion = async (id) => {
+    setError('')
+    const { error: delErr } = await supabase.from('questions').delete().eq('id', id)
+    if (delErr) return setError(delErr.message)
+    setQuestions((prev) => prev.filter((q) => q.id !== id))
+  }
+
+  // Agrupadas por categoría para mostrarlas.
+  const grouped = categories.map((cat) => ({
+    category: cat,
+    items: questions.filter((q) => q.category === cat),
+  }))
+
+  return (
+    <Card title="Banco de preguntas">
+      <button className="text-sm text-slate-400 hover:text-slate-200" onClick={onBack}>
+        ← Volver
+      </button>
+
+      <form
+        className="space-y-2 border border-slate-700 rounded p-3"
+        onSubmit={(e) => {
+          e.preventDefault()
+          addQuestion()
+        }}
+      >
+        <h3 className="font-bold">Nueva pregunta</h3>
+        <input
+          className="input"
+          placeholder="Categoría (p.ej. Historia)"
+          list="bank-categories"
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+        />
+        <datalist id="bank-categories">
+          {categories.map((c) => (
+            <option key={c} value={c} />
+          ))}
+        </datalist>
+        <input
+          className="input"
+          placeholder="Título de la pregunta"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+        />
+        {LETTERS.map((l, i) => (
+          <div key={l} className="flex items-center gap-2">
+            <input
+              type="radio"
+              name="correct"
+              checked={correct === l}
+              onChange={() => setCorrect(l)}
+            />
+            <input
+              className="input flex-1"
+              placeholder={`Opción ${l}`}
+              value={options[i]}
+              onChange={(e) => setOptions(options.map((o, j) => (j === i ? e.target.value : o)))}
+            />
+          </div>
+        ))}
+        {error && <p className="text-sm text-red-400">{error}</p>}
+        <button className="btn" type="submit" disabled={!valid}>
+          Guardar pregunta
+        </button>
+      </form>
+
+      <div className="space-y-3">
+        <h3 className="font-bold">Tus preguntas ({questions.length})</h3>
+        {questions.length === 0 && (
+          <p className="text-sm text-slate-500">Aún no has creado preguntas.</p>
+        )}
+        {grouped.map((group) => (
+          <div key={group.category} className="space-y-1">
+            <p className="text-sm font-semibold text-indigo-300">{group.category}</p>
+            {group.items.map((q) => (
+              <div
+                key={q.id}
+                className="flex justify-between items-center gap-2 bg-slate-800 rounded px-3 py-2"
+              >
+                <span className="text-sm">{q.title}</span>
+                <button
+                  className="text-sm text-red-400 hover:text-red-300 shrink-0"
+                  onClick={() => removeQuestion(q.id)}
+                >
+                  Eliminar
+                </button>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+// Crear sala: se elige el tiempo por pregunta, una categoría del banco y, dentro
+// de ella, las preguntas concretas (el orden de selección define el orden de
+// juego). Al crear la sala se insertan las filas de room_questions.
+function CreateRoom({ session, setRoom, onBack }) {
   const [timePerQuestion, setTimePerQuestion] = useState(15)
+  const [questions, setQuestions] = useState([])
+  const [category, setCategory] = useState('')
+  const [selectedIds, setSelectedIds] = useState([]) // en orden de selección
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    supabase
+      .from('questions')
+      .select('*')
+      .eq('admin_id', session.user.id)
+      .order('created_at')
+      .then(({ data }) => setQuestions(data ?? []))
+  }, [])
+
+  const categories = [...new Set(questions.map((q) => q.category))].sort()
+  const inCategory = category ? questions.filter((q) => q.category === category) : []
+
+  const selectCategory = (cat) => {
+    setCategory(cat)
+    setSelectedIds([])
+  }
+
+  const toggle = (id) =>
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
 
   const createRoom = async () => {
+    setError('')
+    if (selectedIds.length === 0) return
     const id = generateRoomCode()
-    const { data, error } = await supabase
+    const { data: r, error: rErr } = await supabase
       .from('rooms')
       .insert({
         id,
@@ -263,15 +510,24 @@ function CreateRoom({ session, setRoom }) {
       })
       .select()
       .single()
-    if (error) return alert(error.message)
-    setRoom(data)
+    if (rErr) return setError(rErr.message)
+    const rows = selectedIds.map((qid, i) => ({
+      room_id: id,
+      question_id: qid,
+      question_number: i,
+    }))
+    const { error: rqErr } = await supabase.from('room_questions').insert(rows)
+    if (rqErr) return setError(rqErr.message)
+    setRoom(r)
   }
 
   return (
     <Card title="Crear sala">
-      <p className="text-sm text-slate-400 text-center">{session.user.email}</p>
+      <button className="text-sm text-slate-400 hover:text-slate-200" onClick={onBack}>
+        ← Volver
+      </button>
       <form
-        className="space-y-3"
+        className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
           createRoom()
@@ -297,18 +553,79 @@ function CreateRoom({ session, setRoom }) {
             ))}
           </div>
         </div>
-        <button className="btn" type="submit">
+
+        <div>
+          <p className="text-sm mb-1">Categoría</p>
+          {categories.length === 0 ? (
+            <p className="text-sm text-amber-400">
+              No tienes preguntas en el banco. Crea alguna primero.
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Categoría">
+              {categories.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  aria-pressed={category === c}
+                  onClick={() => selectCategory(c)}
+                  className={`px-3 py-1.5 rounded font-semibold transition-colors ${
+                    category === c
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                  }`}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {category && (
+          <div>
+            <p className="text-sm mb-1">
+              Preguntas ({selectedIds.length} seleccionadas) — el orden de selección es el orden de
+              juego
+            </p>
+            <div className="space-y-2">
+              {inCategory.map((q) => {
+                const order = selectedIds.indexOf(q.id)
+                const selected = order !== -1
+                return (
+                  <button
+                    key={q.id}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => toggle(q.id)}
+                    className={`w-full text-left px-3 py-2 rounded transition-colors flex items-center gap-2 ${
+                      selected
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-slate-700 text-slate-200 hover:bg-slate-600'
+                    }`}
+                  >
+                    {selected && (
+                      <span className="shrink-0 w-6 h-6 flex items-center justify-center rounded-full bg-white text-indigo-700 text-sm font-bold">
+                        {order + 1}
+                      </span>
+                    )}
+                    <span className="text-sm">{q.title}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {error && <p className="text-sm text-red-400">{error}</p>}
+        <button className="btn" type="submit" disabled={selectedIds.length === 0}>
           Crear sala
         </button>
       </form>
-      <button className="btn bg-slate-700 hover:bg-slate-600" type="button" onClick={() => supabase.auth.signOut()}>
-        Cerrar sesión
-      </button>
     </Card>
   )
 }
 
-function AdminRoom({ room, setRoom }) {
+function AdminRoom({ room, setRoom, onExit }) {
   const [participants, setParticipants] = useState([])
   const [questions, setQuestions] = useState([])
   const [liveAnswers, setLiveAnswers] = useState([])
@@ -316,6 +633,20 @@ function AdminRoom({ room, setRoom }) {
   const stats = useQuestionStats(room, question)
 
   useRoomSubscription(room.id, setRoom)
+
+  // Preguntas de la sala (banco filtrado vía room_questions, en orden de juego).
+  useEffect(() => {
+    supabase
+      .from('room_questions')
+      .select('question_number, questions(*)')
+      .eq('room_id', room.id)
+      .order('question_number')
+      .then(({ data }) =>
+        setQuestions(
+          (data ?? []).map((rq) => ({ ...rq.questions, question_number: rq.question_number })),
+        ),
+      )
+  }, [room.id])
 
   // Participantes en vivo (INSERT mientras la sala está abierta, UPDATE para scores)
   useEffect(() => {
@@ -341,15 +672,24 @@ function AdminRoom({ room, setRoom }) {
     return () => supabase.removeChannel(channel)
   }, [room.id])
 
-  // Respuestas en vivo de la pregunta actual (solo el admin lo necesita)
+  // Limpia las respuestas en vivo solo al cambiar de pregunta (no al pasar de
+  // in_question a showing_results, donde queremos conservar el desglose).
   useEffect(() => {
     setLiveAnswers([])
-    if (!question || room.status !== 'in_question') return
+  }, [question?.id])
+
+  // Respuestas en vivo de la pregunta actual (solo el admin lo necesita). Se
+  // refresca tanto en in_question como en showing_results para el desglose.
+  useEffect(() => {
+    if (!question || !['in_question', 'showing_results'].includes(room.status)) return
+    let active = true
     supabase
       .from('answers')
       .select('*')
       .eq('question_id', question.id)
-      .then(({ data }) => setLiveAnswers(data ?? []))
+      .then(({ data }) => {
+        if (active) setLiveAnswers(data ?? [])
+      })
     const channel = supabase
       .channel(`answers-${question.id}`)
       .on(
@@ -358,7 +698,10 @@ function AdminRoom({ room, setRoom }) {
         (payload) => setLiveAnswers((prev) => [...prev, payload.new]),
       )
       .subscribe()
-    return () => supabase.removeChannel(channel)
+    return () => {
+      active = false
+      supabase.removeChannel(channel)
+    }
   }, [question?.id, room.status])
 
   const updateRoom = async (fields) => {
@@ -389,14 +732,22 @@ function AdminRoom({ room, setRoom }) {
   return (
     <Card title={`Sala ${room.id} · ${room.status.toUpperCase()}`}>
       {room.status === 'waiting' && (
-        <button className="btn" onClick={() => updateRoom({ status: 'open' })}>
-          Abrir sala
-        </button>
+        <>
+          <p className="text-sm text-slate-400">{questions.length} preguntas seleccionadas</p>
+          <ol className="text-sm text-slate-300 list-decimal list-inside">
+            {questions.map((q) => (
+              <li key={q.id}>{q.title}</li>
+            ))}
+          </ol>
+          <button className="btn" onClick={() => updateRoom({ status: 'open' })}>
+            Abrir sala
+          </button>
+        </>
       )}
 
       {room.status === 'open' && (
         <>
-          <QuestionForm room={room} questions={questions} setQuestions={setQuestions} />
+          <p className="text-sm text-slate-400">{questions.length} preguntas</p>
           <h3 className="font-bold mt-4">Participantes ({participants.length})</h3>
           <ul className="text-sm text-slate-300">
             {participants.map((p) => (
@@ -405,7 +756,7 @@ function AdminRoom({ room, setRoom }) {
           </ul>
           {questions.length === 0 && (
             <p className="text-sm text-amber-400">
-              Agrega al menos una pregunta para poder cerrar la sala.
+              La sala no tiene preguntas; no se puede cerrar.
             </p>
           )}
           <button
@@ -440,18 +791,15 @@ function AdminRoom({ room, setRoom }) {
           </h3>
           {phase === 'reading' && <p className="text-amber-400">📖 Tiempo de lectura...</p>}
           {phase === 'answering' && (
-            <p className="text-3xl font-mono text-center">⏱ {timeLeft}s</p>
+            <>
+              <p className="text-3xl font-mono text-center">⏱ {timeLeft}s</p>
+              <TimerBar phase={phase} timeLeft={timeLeft} total={room.time_per_question} />
+            </>
           )}
           <p>
             Respuestas en vivo: {liveAnswers.length} / {participants.length}
           </p>
-          <ul className="text-sm text-slate-300">
-            {LETTERS.map((l) => (
-              <li key={l}>
-                {l}: {liveAnswers.filter((a) => a.answer === l).length}
-              </li>
-            ))}
-          </ul>
+          <AnswerBreakdown question={question} answers={liveAnswers} showCorrect={false} />
         </>
       )}
 
@@ -467,89 +815,22 @@ function AdminRoom({ room, setRoom }) {
               Acierto: {stats.pct}% ({stats.correct}/{stats.total})
             </p>
           )}
+          <AnswerBreakdown question={question} answers={liveAnswers} showCorrect={true} />
           <button className="btn" onClick={nextQuestion}>
             {room.current_question_index + 1 < questions.length ? 'Siguiente' : 'Finalizar'}
           </button>
         </>
       )}
 
-      {room.status === 'finished' && <Ranking roomId={room.id} />}
+      {room.status === 'finished' && (
+        <>
+          <Ranking roomId={room.id} />
+          <button className="btn bg-slate-700 hover:bg-slate-600" onClick={onExit}>
+            Volver al menú
+          </button>
+        </>
+      )}
     </Card>
-  )
-}
-
-function QuestionForm({ room, questions, setQuestions }) {
-  const [title, setTitle] = useState('')
-  const [options, setOptions] = useState(['', '', '', ''])
-  const [correct, setCorrect] = useState('A')
-
-  useEffect(() => {
-    supabase
-      .from('questions')
-      .select('*')
-      .eq('room_id', room.id)
-      .order('question_number')
-      .then(({ data }) => setQuestions(data ?? []))
-  }, [room.id])
-
-  const addQuestion = async () => {
-    const { data, error } = await supabase
-      .from('questions')
-      .insert({
-        room_id: room.id,
-        question_number: questions.length,
-        title,
-        options,
-        correct_answer: correct,
-      })
-      .select()
-      .single()
-    if (error) return alert(error.message)
-    setQuestions([...questions, data])
-    setTitle('')
-    setOptions(['', '', '', ''])
-    setCorrect('A')
-  }
-
-  const valid = title.trim() && options.every((o) => o.trim())
-
-  return (
-    <form
-      className="space-y-2 border border-slate-700 rounded p-3"
-      onSubmit={(e) => {
-        e.preventDefault()
-        if (valid) addQuestion()
-      }}
-    >
-      <h3 className="font-bold">Agregar pregunta ({questions.length} creadas)</h3>
-      <input
-        className="input"
-        placeholder="Título de la pregunta"
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-      />
-      {LETTERS.map((l, i) => (
-        <div key={l} className="flex items-center gap-2">
-          <input
-            type="radio"
-            name="correct"
-            checked={correct === l}
-            onChange={() => setCorrect(l)}
-          />
-          <input
-            className="input flex-1"
-            placeholder={`Opción ${l}`}
-            value={options[i]}
-            onChange={(e) =>
-              setOptions(options.map((o, j) => (j === i ? e.target.value : o)))
-            }
-          />
-        </div>
-      ))}
-      <button className="btn" type="submit" disabled={!valid}>
-        Agregar
-      </button>
-    </form>
   )
 }
 
@@ -700,7 +981,10 @@ function ParticipantRoom({ room, setRoom, participant }) {
           <h3 className="text-xl font-bold text-center">{question.title}</h3>
           {phase === 'reading' && <p className="text-center text-amber-400">📖 Lee la pregunta...</p>}
           {phase === 'answering' && (
-            <p className="text-4xl font-mono text-center">{timeLeft}</p>
+            <>
+              <p className="text-4xl font-mono text-center">{timeLeft}</p>
+              <TimerBar phase={phase} timeLeft={timeLeft} total={room.time_per_question} />
+            </>
           )}
           <div className="grid grid-cols-2 gap-2">
             {LETTERS.map((l, i) => (
