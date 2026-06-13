@@ -45,6 +45,7 @@ Las tablas `rooms`, `participants` y `answers` están en la publicación `supaba
 ## Autenticación y RLS (crítico)
 
 - El admin se autentica con **Supabase Auth (email + contraseña)**; `rooms.admin_id = auth.uid()`. Los participantes NO tienen cuenta (solo username), tal como pide el flujo simple.
+- **No hay auto-registro**: "Allow new users to sign up" está desactivado en Supabase. `AdminAuth` (en `App.jsx`) solo tiene login, no signup. Las cuentas de admin las crea el dueño del proyecto manualmente desde Authentication → Users → "Add user" (con "Auto Confirm User"). Ver README sección "Administradores".
 - RLS está **habilitado** en las 4 tablas (ver `supabase/schema.sql`):
   - `rooms`/`participants`: SELECT abierto a todos (lobby, ranking). `rooms` solo se puede INSERT/UPDATE si `admin_id = auth.uid()`. `participants` solo se puede INSERT si la sala está `open`.
   - `questions`/`answers`: solo legibles/escribibles por el admin dueño de la sala (vía join a `rooms.admin_id = auth.uid()`). Los participantes nunca leen estas tablas directamente.

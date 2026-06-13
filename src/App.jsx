@@ -165,23 +165,18 @@ function AdminApp() {
 function AdminAuth() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [mode, setMode] = useState('signin') // signin | signup
   const [message, setMessage] = useState('')
 
+  // No hay auto-registro: las cuentas de admin se crean manualmente desde
+  // el dashboard de Supabase (Authentication → Users → Add user).
   const submit = async () => {
     setMessage('')
-    const { error } =
-      mode === 'signin'
-        ? await supabase.auth.signInWithPassword({ email, password })
-        : await supabase.auth.signUp({ email, password })
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) return setMessage(error.message)
-    if (mode === 'signup') {
-      setMessage('Cuenta creada. Revisa tu email para confirmar y luego inicia sesión.')
-    }
   }
 
   return (
-    <Card title={mode === 'signin' ? 'Admin · Iniciar sesión' : 'Admin · Crear cuenta'}>
+    <Card title="Admin · Iniciar sesión">
       <input
         className="input"
         type="email"
@@ -198,16 +193,7 @@ function AdminAuth() {
       />
       {message && <p className="text-sm text-amber-400">{message}</p>}
       <button className="btn" disabled={!email.trim() || !password.trim()} onClick={submit}>
-        {mode === 'signin' ? 'Entrar' : 'Crear cuenta'}
-      </button>
-      <button
-        className="btn bg-slate-700 hover:bg-slate-600"
-        onClick={() => {
-          setMode((m) => (m === 'signin' ? 'signup' : 'signin'))
-          setMessage('')
-        }}
-      >
-        {mode === 'signin' ? '¿No tienes cuenta? Crear una' : '¿Ya tienes cuenta? Iniciar sesión'}
+        Entrar
       </button>
     </Card>
   )

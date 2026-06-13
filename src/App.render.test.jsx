@@ -54,7 +54,7 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: 'Soy Participante' })).toBeInTheDocument()
   })
 
-  it('flujo admin sin sesión: muestra el login y permite cambiar a registro', async () => {
+  it('flujo admin sin sesión: muestra solo el login (sin auto-registro)', async () => {
     const user = userEvent.setup()
     render(<App />)
 
@@ -63,9 +63,7 @@ describe('App', () => {
     expect(await screen.findByPlaceholderText('Email')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Contraseña')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Entrar' })).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: '¿No tienes cuenta? Crear una' }))
-    expect(screen.getByRole('button', { name: 'Crear cuenta' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Crear cuenta' })).not.toBeInTheDocument()
   })
 
   it('flujo admin con sesión activa: muestra la pantalla de crear sala', async () => {
