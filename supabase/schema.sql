@@ -23,6 +23,10 @@ create table participants (
   created_at timestamptz not null default now()
 );
 
+-- Consultada por sala (ranking, lobby en vivo); sin esto sería un full
+-- table scan que empeora a medida que se acumulan sesiones.
+create index participants_room_id_idx on participants (room_id);
+
 create table questions (
   id uuid primary key default gen_random_uuid(),
   room_id text not null references rooms(id) on delete cascade,
