@@ -4,6 +4,23 @@
 -- Requiere autenticación por email/contraseña habilitada
 -- (Authentication → Providers → Email). El admin se identifica con
 -- auth.users; los participantes no requieren cuenta.
+--
+-- Este script es idempotente: primero elimina las tablas y funciones si ya
+-- existen (CASCADE se lleva índices, policies y triggers asociados) y luego
+-- recrea todo desde cero.
+
+-- ============================================================
+-- Limpieza
+-- ============================================================
+drop table if exists answers, questions, participants, rooms cascade;
+
+drop function if exists get_current_question(text);
+drop function if exists get_question_stats(uuid);
+drop function if exists submit_answer(uuid, uuid, text);
+
+-- ============================================================
+-- Tablas
+-- ============================================================
 
 create table rooms (
   id text primary key, -- código de 6 chars generado en cliente
@@ -47,6 +64,26 @@ create table answers (
   created_at timestamptz not null default now(),
   unique (question_id, participant_id) -- una respuesta por participante y pregunta
 );
+
+-- ============================================================
+-- Permisos de tabla
+-- ============================================================
+-- Las políticas RLS de más abajo controlan QUÉ filas son visibles/editables,
+-- pero antes de eso Postgres exige permisos a nivel de tabla para los roles
+-- anon/authenticated (si no existen, el error es "permission denied for
+-- table ..." en vez de "violates row-level security policy").
+
+grant usage on schema public to anon, authenticated;
+
+grant select on rooms to anon, authenticated;
+grant insert, update on rooms to authenticated;
+
+grant select on participants to anon, authenticated;
+grant insert on participants to anon;
+
+grant select, insert on questions to authenticated;
+
+grant select on answers to authenticated;
 
 -- ============================================================
 -- Row Level Security

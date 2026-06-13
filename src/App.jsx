@@ -177,24 +177,32 @@ function AdminAuth() {
 
   return (
     <Card title="Admin · Iniciar sesión">
-      <input
-        className="input"
-        type="email"
-        placeholder="Email"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-      />
-      <input
-        className="input"
-        type="password"
-        placeholder="Contraseña"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-      />
-      {message && <p className="text-sm text-amber-400">{message}</p>}
-      <button className="btn" disabled={!email.trim() || !password.trim()} onClick={submit}>
-        Entrar
-      </button>
+      <form
+        className="space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault()
+          submit()
+        }}
+      >
+        <input
+          className="input"
+          type="email"
+          placeholder="Email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <input
+          className="input"
+          type="password"
+          placeholder="Contraseña"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+        {message && <p className="text-sm text-amber-400">{message}</p>}
+        <button className="btn" type="submit" disabled={!email.trim() || !password.trim()}>
+          Entrar
+        </button>
+      </form>
     </Card>
   )
 }
@@ -222,21 +230,32 @@ function CreateRoom({ session, setRoom }) {
   return (
     <Card title="Crear sala">
       <p className="text-sm text-slate-400 text-center">{session.user.email}</p>
-      <label className="block text-sm">
-        Segundos por pregunta (10-15)
-        <input
-          type="number"
-          min="10"
-          max="15"
-          className="input"
-          value={timePerQuestion}
-          onChange={(e) => setTimePerQuestion(Number(e.target.value))}
-        />
-      </label>
-      <button className="btn" onClick={createRoom}>
-        Crear sala
-      </button>
-      <button className="btn bg-slate-700 hover:bg-slate-600" onClick={() => supabase.auth.signOut()}>
+      <form
+        className="space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault()
+          createRoom()
+        }}
+      >
+        <label className="block text-sm">
+          Segundos por pregunta
+          <select
+            className="input"
+            value={timePerQuestion}
+            onChange={(e) => setTimePerQuestion(Number(e.target.value))}
+          >
+            {[10, 15, 20, 25, 30].map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="btn" type="submit">
+          Crear sala
+        </button>
+      </form>
+      <button className="btn bg-slate-700 hover:bg-slate-600" type="button" onClick={() => supabase.auth.signOut()}>
         Cerrar sesión
       </button>
     </Card>
@@ -443,7 +462,13 @@ function QuestionForm({ room, questions, setQuestions }) {
   const valid = title.trim() && options.every((o) => o.trim())
 
   return (
-    <div className="space-y-2 border border-slate-700 rounded p-3">
+    <form
+      className="space-y-2 border border-slate-700 rounded p-3"
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (valid) addQuestion()
+      }}
+    >
       <h3 className="font-bold">Agregar pregunta ({questions.length} creadas)</h3>
       <input
         className="input"
@@ -469,10 +494,10 @@ function QuestionForm({ room, questions, setQuestions }) {
           />
         </div>
       ))}
-      <button className="btn" disabled={!valid} onClick={addQuestion}>
+      <button className="btn" type="submit" disabled={!valid}>
         Agregar
       </button>
-    </div>
+    </form>
   )
 }
 
@@ -518,24 +543,32 @@ function ParticipantApp() {
 
   return (
     <Card title="Unirse a una sala">
-      <input
-        className="input"
-        placeholder="Tu nombre"
-        value={username}
-        onChange={(e) => setUsername(e.target.value)}
-      />
-      <div className="flex gap-2">
+      <form
+        className="space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (username.trim() && code.length === 6) join(code)
+        }}
+      >
         <input
-          className="input flex-1 uppercase"
-          placeholder="Código (6 chars)"
-          maxLength={6}
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
+          className="input"
+          placeholder="Tu nombre"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
         />
-        <button className="btn" disabled={!username.trim() || code.length !== 6} onClick={() => join(code)}>
-          Entrar
-        </button>
-      </div>
+        <div className="flex gap-2">
+          <input
+            className="input flex-1 uppercase"
+            placeholder="Código (6 chars)"
+            maxLength={6}
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+          />
+          <button className="btn" type="submit" disabled={!username.trim() || code.length !== 6}>
+            Entrar
+          </button>
+        </div>
+      </form>
       {openRooms.length > 0 && (
         <>
           <p className="text-sm text-slate-400">Salas abiertas:</p>
@@ -543,6 +576,7 @@ function ParticipantApp() {
             <button
               key={r.id}
               className="btn w-full bg-slate-700 hover:bg-slate-600"
+              type="button"
               disabled={!username.trim()}
               onClick={() => join(r.id)}
             >
