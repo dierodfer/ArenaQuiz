@@ -88,6 +88,6 @@ describe('App', () => {
 
     expect(screen.getByText('Unirse a una sala')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Tu nombre')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('Código (6 chars)')).toBeInTheDocument()
+    expect(screen.getByText('Elige una sala:')).toBeInTheDocument()
   })
 })

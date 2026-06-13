@@ -1,5 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from './supabaseClient'
+// Listas públicas de palabras ofensivas (paquete `naughty-words`). Viven en
+// node_modules, no en este repo. Importamos solo es+en para no inflar el bundle.
+import esBadWords from 'naughty-words/es.json'
+import enBadWords from 'naughty-words/en.json'
 
 const READ_SECONDS = 3
 const LETTERS = ['A', 'B', 'C', 'D']
@@ -13,6 +17,42 @@ const LETTER_COLORS = {
 export function generateRoomCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
   return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
+}
+
+const USERNAME_MIN_LENGTH = 3
+
+// Marcas diacríticas combinantes (acentos) en Unicode, para poder quitarlas.
+const DIACRITICS = new RegExp('[\\u0300-\\u036f]', 'g')
+
+// Minúsculas y sin acentos, para comparar contra la lista negra.
+function normalizeForMatch(str) {
+  return str.toLowerCase().normalize('NFD').replace(DIACRITICS, '')
+}
+
+// Lista negra normalizada (es + en). Solo palabras de 3+ letras para evitar
+// falsos positivos triviales.
+const USERNAME_BLACKLIST = new Set(
+  [...esBadWords, ...enBadWords]
+    .map((w) => normalizeForMatch(w).replace(/[^a-z]+/g, ''))
+    .filter((w) => w.length >= USERNAME_MIN_LENGTH),
+)
+
+// Valida el nombre del participante. Devuelve un mensaje de error o null si es
+// válido. Bloquea si el nombre entero (sin separadores) o alguno de sus tokens
+// coincide exactamente con una palabra de la lista negra; el match exacto evita
+// bloquear nombres legítimos que contengan una mala palabra (p.ej. "Mariano").
+export function validateUsername(name) {
+  const trimmed = name.trim()
+  if (trimmed.length < USERNAME_MIN_LENGTH) {
+    return `El nombre debe tener al menos ${USERNAME_MIN_LENGTH} caracteres.`
+  }
+  const normalized = normalizeForMatch(trimmed)
+  const collapsed = normalized.replace(/[^a-z]+/g, '')
+  const tokens = normalized.split(/[^a-z]+/).filter(Boolean)
+  if (USERNAME_BLACKLIST.has(collapsed) || tokens.some((t) => USERNAME_BLACKLIST.has(t))) {
+    return 'Ese nombre no está permitido. Elige otro.'
+  }
+  return null
 }
 
 // Timer cliente: fase "lea" de 3s sin timer visible, luego cuenta atrás oficial.
@@ -237,20 +277,26 @@ function CreateRoom({ session, setRoom }) {
           createRoom()
         }}
       >
-        <label className="block text-sm">
-          Segundos por pregunta
-          <select
-            className="input"
-            value={timePerQuestion}
-            onChange={(e) => setTimePerQuestion(Number(e.target.value))}
-          >
+        <div>
+          <p className="text-sm mb-1">Segundos por pregunta</p>
+          <div className="flex gap-2" role="group" aria-label="Segundos por pregunta">
             {[10, 15, 20, 25, 30].map((s) => (
-              <option key={s} value={s}>
+              <button
+                key={s}
+                type="button"
+                aria-pressed={timePerQuestion === s}
+                onClick={() => setTimePerQuestion(s)}
+                className={`flex-1 py-2 rounded font-semibold transition-colors ${
+                  timePerQuestion === s
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                }`}
+              >
                 {s}
-              </option>
+              </button>
             ))}
-          </select>
-        </label>
+          </div>
+        </div>
         <button className="btn" type="submit">
           Crear sala
         </button>
@@ -357,8 +403,14 @@ function AdminRoom({ room, setRoom }) {
               <li key={p.id}>• {p.username}</li>
             ))}
           </ul>
+          {questions.length === 0 && (
+            <p className="text-sm text-amber-400">
+              Agrega al menos una pregunta para poder cerrar la sala.
+            </p>
+          )}
           <button
             className="btn bg-orange-600 hover:bg-orange-500"
+            disabled={questions.length === 0}
             onClick={() => updateRoom({ status: 'closed' })}
           >
             Cerrar sala
@@ -507,8 +559,9 @@ function ParticipantApp() {
   const [username, setUsername] = useState('')
   const [participant, setParticipant] = useState(null)
   const [room, setRoom] = useState(null)
-  const [code, setCode] = useState('')
+  const [selectedRoomId, setSelectedRoomId] = useState(null)
   const [openRooms, setOpenRooms] = useState([])
+  const [error, setError] = useState('')
 
   useEffect(() => {
     if (participant) return
@@ -519,20 +572,25 @@ function ParticipantApp() {
       .then(({ data }) => setOpenRooms(data ?? []))
   }, [participant])
 
-  const join = async (roomId) => {
-    const { data: r, error } = await supabase
+  const usernameError = validateUsername(username)
+  const canJoin = !usernameError && !!selectedRoomId
+
+  const join = async () => {
+    setError('')
+    if (!canJoin) return
+    const { data: r, error: rErr } = await supabase
       .from('rooms')
       .select('*')
-      .eq('id', roomId.toUpperCase().trim())
+      .eq('id', selectedRoomId)
       .single()
-    if (error || !r) return alert('Sala no encontrada')
-    if (r.status !== 'open') return alert('La sala no está abierta')
+    if (rErr || !r) return setError('Sala no encontrada')
+    if (r.status !== 'open') return setError('La sala ya no está abierta')
     const { data: p, error: pErr } = await supabase
       .from('participants')
       .insert({ room_id: r.id, username: username.trim(), score: 0 })
       .select()
       .single()
-    if (pErr) return alert(pErr.message)
+    if (pErr) return setError(pErr.message)
     setRoom(r)
     setParticipant(p)
   }
@@ -544,47 +602,55 @@ function ParticipantApp() {
   return (
     <Card title="Unirse a una sala">
       <form
-        className="space-y-3"
+        className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
-          if (username.trim() && code.length === 6) join(code)
+          join()
         }}
       >
-        <input
-          className="input"
-          placeholder="Tu nombre"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-        />
-        <div className="flex gap-2">
+        <div>
           <input
-            className="input flex-1 uppercase"
-            placeholder="Código (6 chars)"
-            maxLength={6}
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
+            className="input"
+            placeholder="Tu nombre"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
           />
-          <button className="btn" type="submit" disabled={!username.trim() || code.length !== 6}>
-            Entrar
-          </button>
+          {username.trim() && usernameError && (
+            <p className="text-sm text-amber-400 mt-1">{usernameError}</p>
+          )}
         </div>
+
+        <div>
+          <p className="text-sm text-slate-400 mb-1">Elige una sala:</p>
+          {openRooms.length === 0 ? (
+            <p className="text-sm text-slate-500">No hay salas abiertas ahora mismo.</p>
+          ) : (
+            <div className="space-y-2">
+              {openRooms.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  aria-pressed={selectedRoomId === r.id}
+                  onClick={() => setSelectedRoomId(r.id)}
+                  className={`w-full px-4 py-2 rounded font-mono tracking-widest transition-colors ${
+                    selectedRoomId === r.id
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-slate-700 text-slate-200 hover:bg-slate-600'
+                  }`}
+                >
+                  {r.id}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {error && <p className="text-sm text-red-400">{error}</p>}
+
+        <button className="btn" type="submit" disabled={!canJoin}>
+          Entrar
+        </button>
       </form>
-      {openRooms.length > 0 && (
-        <>
-          <p className="text-sm text-slate-400">Salas abiertas:</p>
-          {openRooms.map((r) => (
-            <button
-              key={r.id}
-              className="btn w-full bg-slate-700 hover:bg-slate-600"
-              type="button"
-              disabled={!username.trim()}
-              onClick={() => join(r.id)}
-            >
-              {r.id}
-            </button>
-          ))}
-        </>
-      )}
     </Card>
   )
 }

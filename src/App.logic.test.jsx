@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { generateRoomCode, useQuestionTimer } from './App'
+import { generateRoomCode, useQuestionTimer, validateUsername } from './App'
 
 // App.jsx importa supabaseClient a nivel de módulo; lo mockeamos para que
 // createClient no falle al no haber credenciales reales en el entorno de test.
@@ -16,6 +16,31 @@ describe('generateRoomCode', () => {
   it('genera códigos distintos entre llamadas', () => {
     const codes = new Set(Array.from({ length: 30 }, () => generateRoomCode()))
     expect(codes.size).toBeGreaterThan(1)
+  })
+})
+
+describe('validateUsername', () => {
+  it('rechaza nombres con menos de 3 caracteres', () => {
+    expect(validateUsername('ab')).toBeTruthy()
+    expect(validateUsername('  a ')).toBeTruthy()
+    expect(validateUsername('')).toBeTruthy()
+  })
+
+  it('acepta nombres de 3 o más caracteres', () => {
+    expect(validateUsername('ana')).toBeNull()
+    expect(validateUsername('  Pedro ')).toBeNull()
+  })
+
+  it('rechaza palabras ofensivas (es) ignorando mayúsculas, acentos y dígitos', () => {
+    expect(validateUsername('puta')).toBeTruthy()
+    expect(validateUsername('Mierda')).toBeTruthy()
+    expect(validateUsername('puta69')).toBeTruthy()
+    expect(validateUsername('soy puta')).toBeTruthy()
+  })
+
+  it('no bloquea nombres legítimos que contienen una mala palabra como subcadena', () => {
+    expect(validateUsername('Mariano')).toBeNull()
+    expect(validateUsername('Calculo')).toBeNull()
   })
 })
 
