@@ -1,61 +1,74 @@
-# ArenaQuiz
+# 🎯 ArenaQuiz
 
-App tipo Kahoot para encuestas en tiempo real con React (Vite) + Supabase Realtime.
+<div align="center">
 
-## Setup
+[![Build Status](https://img.shields.io/github/actions/workflow/status/dierodfer/ArenaQuiz/ci.yml?branch=main&style=for-the-badge)](https://github.com/dierodfer/ArenaQuiz/actions)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
+[![React](https://img.shields.io/badge/react-19-61dafb?style=for-the-badge&logo=react)](https://react.dev)
+[![Supabase](https://img.shields.io/badge/supabase-realtime-3ecf8e?style=for-the-badge&logo=supabase)](https://supabase.com)
 
-1. Crea un proyecto en [Supabase](https://supabase.com) y ejecuta `supabase/schema.sql` en el SQL Editor (crea tablas, políticas RLS y las funciones RPC).
-2. **Authentication → Sign In / Providers**:
-   - Desactiva **"Allow new users to sign up"** (sección "User Signups"). No hay auto-registro: las cuentas de admin se crean manualmente (ver sección "Administradores" más abajo).
-   - Deja **"Confirm email"** activado (valor por defecto).
-3. Copia las credenciales:
+</div>
 
-   ```bash
-   cp .env.example .env
-   # Rellena VITE_SUPABASE_URL y VITE_SUPABASE_PUBLISHABLE_KEY (Settings → API Keys)
-   ```
+App tipo Kahoot para hacer encuestas y quizzes en tiempo real. Ideal para jugar en grupo desde el móvil o el ordenador. ¡Sin instalación, sin complicaciones!
 
-4. Instala y arranca:
+---
 
-   ```bash
-   npm install
-   npm run dev
-   ```
+## 🚀 Juega ahora
 
-## Tests
+👉 **[Entra a ArenaQuiz](https://dierodfer.github.io/ArenaQuiz/)**
 
-```bash
-npm run test       # corre los tests una vez (Vitest)
-npm run test:watch # modo watch
-```
+---
 
-CI (`.github/workflows/ci.yml`) corre los tests y el build en cada push/PR a `main`.
+## 📖 Cómo jugar
 
-## Administradores
+### 👥 Como participante
 
-No hay auto-registro: el toggle "Allow new users to sign up" debe estar desactivado en Supabase. Para dar acceso de admin a alguien:
+1. Abre [ArenaQuiz](https://dierodfer.github.io/ArenaQuiz/) y pulsa **"Soy Participante"**
+2. Escribe tu nombre
+3. Únete con el código de 6 caracteres que te dé el organizador, o elige una sala abierta de la lista
+4. Cuando empiece cada pregunta, responde **A/B/C/D** lo más rápido posible
+   - ⏱️ Acertar suma puntos
+   - 🏃 La velocidad también cuenta
+5. Al final verás el ranking con las puntuaciones de todos
 
-1. **Authentication → Users → "Add user"** en el dashboard de Supabase.
-2. Introduce su email y una contraseña.
-3. Marca **"Auto Confirm User"** para que quede activo de inmediato (sin email de confirmación).
+### 🎛️ Como organizador (admin)
 
-Esa persona ya puede entrar en "Soy Admin" → login con esas credenciales y crear sus propias salas.
+> ℹ️ El acceso de admin no es de alta libre. Solicita una cuenta a quien gestiona el proyecto.
 
-## Uso
+1. Pulsa **"Soy Admin"** e inicia sesión con tu email y contraseña
+2. Crea una sala: recibirás un código de 6 caracteres para compartir con los participantes
+3. Abre la sala y añade las preguntas
+   - 4 opciones por pregunta (A, B, C, D)
+   - Marca la respuesta correcta
+4. Cuando todos estén dentro, cierra la sala y pulsa **"Comenzar"**
+5. Gestiona el quiz:
+   - ⏱️ Cada pregunta tiene temporizador automático
+   - 📊 Al acabar se muestran los resultados y % de acierto
+   - ➡️ **"Siguiente"** avanza a la próxima pregunta
+6. Al terminar todas, se muestra el ranking final
 
-- **Admin**: inicia sesión con email + contraseña (cuenta creada por el dueño del proyecto, ver arriba) → crea sala (código de 6 chars) → abre la sala → agrega preguntas → cierra la sala → "Comenzar". El timer del admin cierra cada pregunta automáticamente y muestra resultados; "Siguiente" avanza hasta el ranking final. Solo el dueño de la sala (`admin_id = auth.uid()`) puede gestionarla.
-- **Participante**: pone su nombre (sin cuenta) → entra con código o desde la lista de salas abiertas (solo si la sala está `open`) → responde A/B/C/D cuando el timer está activo. El servidor valida la respuesta y calcula el score (no el cliente). Todo se sincroniza por eventos Realtime de Supabase.
+---
 
-## Seguridad
+## ✨ Características
 
-- RLS está habilitado en las 4 tablas; los participantes (anónimos) solo pueden leer/escribir lo mínimo necesario (ver sección "Autenticación y RLS" en `CLAUDE.md`).
-- La pregunta correcta (`correct_answer`) y las respuestas de otros nunca llegan al cliente del participante antes de `showing_results`: se obtienen mediante funciones RPC que filtran esos datos en el servidor.
-- Si despliegas en GitHub Pages u otro hosting estático, recuerda añadir esa URL en **Authentication → URL Configuration → Site URL / Redirect URLs** de Supabase para que los enlaces de confirmación de email funcionen.
-- El registro de admins está cerrado ("Allow new users to sign up" = OFF); solo el dueño del proyecto Supabase puede crear cuentas de admin (ver "Administradores").
+- 🎮 **En tiempo real**: Respuestas instantáneas con sincronización automática
+- 📱 **Multiplataforma**: Funciona en móvil, tablet y ordenador
+- 🔒 **Seguro**: Autenticación segura para organizadores, sin datos sensibles almacenados
+- ⚡ **Rápido**: Cero tiempo de carga, interfaz fluida
+- 🎨 **Limpio**: Interfaz intuitiva y fácil de usar
 
-## Stack
+---
 
-- React 19 + Vite 8
-- Tailwind CSS v4
-- @supabase/supabase-js v2 (Realtime `postgres_changes`)
-- Vitest + Testing Library
+## 🛠️ Stack técnico
+
+Construido con las mejores tecnologías:
+- **React 19** + **Vite 8** para una app rápida y moderna
+- **Tailwind CSS v4** para estilos limpios
+- **Supabase Realtime** para sincronización en tiempo real
+- Desplegado en **GitHub Pages**
+
+---
+
+## 📄 Licencia
+
+Este proyecto está bajo licencia MIT. Ver [LICENSE](LICENSE) para más detalles.
