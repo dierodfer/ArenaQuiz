@@ -25,6 +25,27 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      # Fallar pronto y con un mensaje claro si faltan los secrets, en vez de
+      # publicar un bundle roto (el SDK lanzaría "supabaseKey is required" en
+      # el navegador). Configúralos en Settings → Secrets and variables → Actions.
+      - name: Verify Supabase secrets are set
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          missing=0
+          if [ -z "$VITE_SUPABASE_URL" ]; then
+            echo "::error::Falta el secret VITE_SUPABASE_URL"; missing=1
+          fi
+          if [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
+            echo "::error::Falta el secret VITE_SUPABASE_ANON_KEY"; missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            echo "Configúralos en Settings → Secrets and variables → Actions y vuelve a lanzar el deploy."
+            exit 1
+          fi
+
       - run: npm run build
         env:
           GITHUB_PAGES: true
