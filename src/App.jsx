@@ -160,6 +160,20 @@ function TimerBar({ phase, timeLeft, total }) {
   )
 }
 
+// Evita copiar/pegar el texto de preguntas y respuestas (deshabilita
+// selección y menú contextual) para que no se compartan fácilmente.
+function NoCopy({ children, className = '' }) {
+  return (
+    <span
+      className={`select-none ${className}`}
+      onCopy={(e) => e.preventDefault()}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {children}
+    </span>
+  )
+}
+
 // Desglose por opción: muestra el texto de cada respuesta posible y, justo
 // debajo, el porcentaje y el número de respuestas recibidas. Si showCorrect,
 // resalta la opción correcta.
@@ -179,7 +193,7 @@ function AnswerBreakdown({ question, answers, showCorrect }) {
           >
             <div className="flex justify-between gap-2">
               <span>
-                <span className="font-bold">{letter}.</span> {opt}
+                <span className="font-bold">{letter}.</span> <NoCopy>{opt}</NoCopy>
               </span>
               {isCorrect && <span className="text-green-400">✔</span>}
             </div>
@@ -787,7 +801,7 @@ function AdminRoom({ room, setRoom, onExit }) {
       {room.status === 'in_question' && question && (
         <>
           <h3 className="text-xl font-bold">
-            Pregunta {room.current_question_index + 1}: {question.title}
+            Pregunta {room.current_question_index + 1}: <NoCopy>{question.title}</NoCopy>
           </h3>
           {phase === 'reading' && <p className="text-amber-400">📖 Tiempo de lectura...</p>}
           {phase === 'answering' && (
@@ -799,16 +813,20 @@ function AdminRoom({ room, setRoom, onExit }) {
           <p>
             Respuestas en vivo: {liveAnswers.length} / {participants.length}
           </p>
-          <AnswerBreakdown question={question} answers={liveAnswers} showCorrect={false} />
+          <p className="text-sm text-slate-400">
+            El desglose de respuestas se muestra cuando se agote el tiempo.
+          </p>
         </>
       )}
 
       {room.status === 'showing_results' && question && (
         <>
-          <h3 className="text-xl font-bold">{question.title}</h3>
+          <h3 className="text-xl font-bold">
+            <NoCopy>{question.title}</NoCopy>
+          </h3>
           <p className="text-green-400">
             ✔ Correcta: {question.correct_answer} —{' '}
-            {question.options[LETTERS.indexOf(question.correct_answer)]}
+            <NoCopy>{question.options[LETTERS.indexOf(question.correct_answer)]}</NoCopy>
           </p>
           {stats && (
             <p>
@@ -844,13 +862,17 @@ function ParticipantApp() {
   const [openRooms, setOpenRooms] = useState([])
   const [error, setError] = useState('')
 
-  useEffect(() => {
-    if (participant) return
+  const loadOpenRooms = () => {
     supabase
       .from('rooms')
       .select('*')
       .eq('status', 'open')
       .then(({ data }) => setOpenRooms(data ?? []))
+  }
+
+  useEffect(() => {
+    if (participant) return
+    loadOpenRooms()
   }, [participant])
 
   const usernameError = validateUsername(username)
@@ -902,7 +924,16 @@ function ParticipantApp() {
         </div>
 
         <div>
-          <p className="text-sm text-slate-400 mb-1">Elige una sala:</p>
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-sm text-slate-400">Elige una sala:</p>
+            <button
+              type="button"
+              onClick={loadOpenRooms}
+              className="text-sm text-indigo-400 hover:text-indigo-300"
+            >
+              ↻ Recargar salas
+            </button>
+          </div>
           {openRooms.length === 0 ? (
             <p className="text-sm text-slate-500">No hay salas abiertas ahora mismo.</p>
           ) : (
@@ -978,7 +1009,9 @@ function ParticipantRoom({ room, setRoom, participant }) {
 
       {room.status === 'in_question' && question && (
         <>
-          <h3 className="text-xl font-bold text-center">{question.title}</h3>
+          <h3 className="text-xl font-bold text-center">
+            <NoCopy>{question.title}</NoCopy>
+          </h3>
           {phase === 'reading' && <p className="text-center text-amber-400">📖 Lee la pregunta...</p>}
           {phase === 'answering' && (
             <>
@@ -996,7 +1029,7 @@ function ParticipantRoom({ room, setRoom, participant }) {
                   myAnswer?.answer === l ? 'ring-4 ring-white' : ''
                 }`}
               >
-                {l}: {question.options[i]}
+                {l}: <NoCopy>{question.options[i]}</NoCopy>
               </button>
             ))}
           </div>
@@ -1006,7 +1039,9 @@ function ParticipantRoom({ room, setRoom, participant }) {
 
       {room.status === 'showing_results' && question && (
         <>
-          <h3 className="text-xl font-bold text-center">{question.title}</h3>
+          <h3 className="text-xl font-bold text-center">
+            <NoCopy>{question.title}</NoCopy>
+          </h3>
           {myAnswer ? (
             <p className={`text-center text-2xl ${myAnswer.is_correct ? 'text-green-400' : 'text-red-400'}`}>
               {myAnswer.is_correct ? '🎉 ¡Acertaste!' : '❌ Fallaste'}
@@ -1016,7 +1051,7 @@ function ParticipantRoom({ room, setRoom, participant }) {
           )}
           <p className="text-center text-green-400">
             Correcta: {question.correct_answer} —{' '}
-            {question.options[LETTERS.indexOf(question.correct_answer)]}
+            <NoCopy>{question.options[LETTERS.indexOf(question.correct_answer)]}</NoCopy>
           </p>
           {stats && (
             <p className="text-center">
