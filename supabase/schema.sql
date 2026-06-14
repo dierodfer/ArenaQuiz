@@ -17,6 +17,7 @@ drop table if exists answers, room_questions, questions, participants, rooms cas
 drop function if exists get_current_question(text);
 drop function if exists get_question_stats(uuid);
 drop function if exists submit_answer(uuid, uuid, text);
+drop function if exists cleanup_finished_room(text);
 
 -- ============================================================
 -- Tablas
@@ -272,6 +273,34 @@ end;
 $$;
 
 grant execute on function submit_answer(uuid, uuid, text) to anon, authenticated;
+
+-- Limpia los datos efímeros de una sala terminada: la selección de preguntas
+-- (room_questions) y las respuestas individuales (answers) de sus
+-- participantes. Conserva rooms/participants (ranking final) y questions
+-- (banco del admin, reutilizable en otras salas). Solo el admin dueño puede
+-- ejecutarla, y solo cuando la sala ya está finished.
+create or replace function cleanup_finished_room(p_room_id text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not exists (
+    select 1 from rooms
+    where id = p_room_id and admin_id = auth.uid() and status = 'finished'
+  ) then
+    raise exception 'room not found, not owned by caller, or not finished';
+  end if;
+
+  delete from answers
+    where participant_id in (select id from participants where room_id = p_room_id);
+
+  delete from room_questions where room_id = p_room_id;
+end;
+$$;
+
+grant execute on function cleanup_finished_room(text) to authenticated;
 
 -- ============================================================
 -- Realtime

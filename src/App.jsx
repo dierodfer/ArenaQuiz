@@ -4,7 +4,7 @@ import {
   Sun, Moon, Target, Loader2, LogIn, Mail, Lock, Unlock, Plus, Library, LogOut,
   ArrowLeft, Tag, Trash2, Clock, ListChecks, Users, User, Play, Copy, Check,
   RefreshCw, Trophy, Medal, Crown, CheckCircle2, XCircle, MinusCircle, AlertCircle,
-  ChevronRight, Triangle, Diamond, Circle, Square, Eye,
+  ChevronRight, Triangle, Diamond, Circle, Square, Eye, SkipForward,
 } from 'lucide-react'
 import { supabase } from './supabaseClient'
 // Listas públicas de palabras ofensivas (paquete `naughty-words`). Viven en
@@ -1073,17 +1073,24 @@ function AdminRoom({ room, setRoom, onExit }) {
     setRoom(data)
   }
 
-  // Timer del admin: cuando llega a 0 cierra la pregunta para todos
-  const { phase, timeLeft } = useQuestionTimer(room, () =>
-    updateRoom({ status: 'showing_results' }),
-  )
+  // Cierra la pregunta para todos, ya sea porque el timer llegó a 0 o porque
+  // el admin la saltó manualmente.
+  const closeQuestion = () => updateRoom({ status: 'showing_results' })
 
-  const nextQuestion = () => {
+  // Timer del admin: cuando llega a 0 cierra la pregunta para todos
+  const { phase, timeLeft } = useQuestionTimer(room, closeQuestion)
+
+  const nextQuestion = async () => {
     const nextIndex = room.current_question_index + 1
     if (nextIndex < questions.length) {
       updateRoom({ current_question_index: nextIndex, status: 'in_question' })
     } else {
-      updateRoom({ status: 'finished' })
+      await updateRoom({ status: 'finished' })
+      // Limpia los datos efímeros de la sala (selección de preguntas y
+      // respuestas individuales); conserva rooms/participants para el ranking
+      // y questions, que vive en el banco del admin.
+      const { error } = await supabase.rpc('cleanup_finished_room', { p_room_id: room.id })
+      if (error) alert(error.message)
     }
   }
 
@@ -1242,6 +1249,12 @@ function AdminRoom({ room, setRoom, onExit }) {
                     <div className="h-full rounded-full bg-indigo-500 transition-all duration-300" style={{ width: `${answeredPct}%` }} />
                   </div>
                   <p className="text-xs text-zinc-400">El desglose se mostrará al agotarse el tiempo.</p>
+                </div>
+                <div className="mx-auto max-w-sm">
+                  <button className="btn-secondary" onClick={closeQuestion}>
+                    <SkipForward className="h-4 w-4" aria-hidden="true" />
+                    Saltar pregunta
+                  </button>
                 </div>
               </div>
             )}
