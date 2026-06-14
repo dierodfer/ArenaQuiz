@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { motion, MotionConfig } from 'framer-motion'
 import {
   Sun, Moon, Target, Loader2, LogIn, Mail, Lock, Unlock, Plus, Library, LogOut,
-  ArrowLeft, Tag, Trash2, Clock, ListChecks, Users, User, Play, Copy, Check,
+  ArrowLeft, Tag, Trash2, Clock, ListChecks, Users, User, Play, Copy, Check, X, Pencil,
   RefreshCw, Trophy, Medal, Crown, CheckCircle2, XCircle, MinusCircle, AlertCircle,
   ChevronRight, Triangle, Diamond, Circle, Square, Eye, SkipForward,
 } from 'lucide-react'
@@ -32,6 +32,9 @@ export function generateRoomCode() {
 }
 
 const USERNAME_MIN_LENGTH = 3
+const USERNAME_MAX_LENGTH = 10
+const EMAIL_MAX_LENGTH = 50
+const ROOM_NAME_MAX_LENGTH = 25
 
 // Marcas diacríticas combinantes (acentos) en Unicode, para poder quitarlas.
 const DIACRITICS = new RegExp('[\\u0300-\\u036f]', 'g')
@@ -58,6 +61,9 @@ export function validateUsername(name) {
   if (trimmed.length < USERNAME_MIN_LENGTH) {
     return `El nombre debe tener al menos ${USERNAME_MIN_LENGTH} caracteres.`
   }
+  if (trimmed.length > USERNAME_MAX_LENGTH) {
+    return `El nombre no puede superar los ${USERNAME_MAX_LENGTH} caracteres.`
+  }
   const normalized = normalizeForMatch(trimmed)
   const collapsed = normalized.replace(/[^a-z]+/g, '')
   const tokens = normalized.split(/[^a-z]+/).filter(Boolean)
@@ -65,6 +71,40 @@ export function validateUsername(name) {
     return 'Ese nombre no está permitido. Elige otro.'
   }
   return null
+}
+
+// Valida el email del participante. Es opcional: vacío es válido (devuelve
+// null). Si se rellena, exige un formato básico y un máximo de caracteres.
+export function validateEmail(email) {
+  const trimmed = email.trim()
+  if (!trimmed) return null
+  if (trimmed.length > EMAIL_MAX_LENGTH) {
+    return `El email no puede superar los ${EMAIL_MAX_LENGTH} caracteres.`
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    return 'Introduce un email válido.'
+  }
+  return null
+}
+
+// Valida el nombre de la sala: obligatorio y máximo 25 caracteres.
+export function validateRoomName(name) {
+  const trimmed = name.trim()
+  if (!trimmed) return 'La sala necesita un nombre.'
+  if (trimmed.length > ROOM_NAME_MAX_LENGTH) {
+    return `El nombre no puede superar los ${ROOM_NAME_MAX_LENGTH} caracteres.`
+  }
+  return null
+}
+
+// Tiempo transcurrido desde una fecha ISO, en formato corto ("hace X min").
+// El segundo argumento facilita testearlo con un "ahora" fijo.
+export function formatRelativeTime(iso, now = Date.now()) {
+  const min = Math.max(0, Math.floor((now - new Date(iso).getTime()) / 60000))
+  if (min < 1) return 'hace <1 min'
+  if (min < 60) return `hace ${min} min`
+  const h = Math.floor(min / 60)
+  return `hace ${h} h`
 }
 
 // Timer cliente: fase "lea" de 3s sin timer visible, luego cuenta atrás oficial.
@@ -820,11 +860,15 @@ function QuestionBank({ session, onBack }) {
 // de ella, las preguntas concretas (el orden de selección define el orden de
 // juego). Al crear la sala se insertan las filas de room_questions.
 function CreateRoom({ session, setRoom, onBack }) {
+  const [name, setName] = useState('')
   const [timePerQuestion, setTimePerQuestion] = useState(15)
   const [questions, setQuestions] = useState([])
   const [category, setCategory] = useState('')
   const [selectedIds, setSelectedIds] = useState([]) // en orden de selección
   const [error, setError] = useState('')
+
+  const nameError = validateRoomName(name)
+  const canCreate = !nameError && selectedIds.length > 0
 
   useEffect(() => {
     supabase
@@ -848,13 +892,14 @@ function CreateRoom({ session, setRoom, onBack }) {
 
   const createRoom = async () => {
     setError('')
-    if (selectedIds.length === 0) return
+    if (!canCreate) return
     const id = generateRoomCode()
     const { data: r, error: rErr } = await supabase
       .from('rooms')
       .insert({
         id,
         admin_id: session.user.id,
+        name: name.trim(),
         status: 'waiting',
         current_question_index: 0,
         time_per_question: timePerQuestion,
@@ -885,6 +930,23 @@ function CreateRoom({ session, setRoom, onBack }) {
               createRoom()
             }}
           >
+            <div>
+              <label htmlFor="room-name" className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                Nombre de la sala
+              </label>
+              <input
+                id="room-name"
+                className="input"
+                placeholder="p.ej. Trivia de empresa"
+                maxLength={ROOM_NAME_MAX_LENGTH}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+              <p className="mt-1 text-right text-xs text-zinc-400">
+                {name.trim().length}/{ROOM_NAME_MAX_LENGTH}
+              </p>
+            </div>
+
             <div>
               <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">
                 <Clock className="h-4 w-4 text-zinc-400" aria-hidden="true" />
@@ -972,7 +1034,7 @@ function CreateRoom({ session, setRoom, onBack }) {
                 {error}
               </p>
             )}
-            <button className="btn" type="submit" disabled={selectedIds.length === 0}>
+            <button className="btn" type="submit" disabled={!canCreate}>
               <Plus className="h-4 w-4" aria-hidden="true" />
               Crear sala
             </button>
@@ -987,6 +1049,7 @@ function AdminRoom({ room, setRoom, onExit }) {
   const [participants, setParticipants] = useState([])
   const [questions, setQuestions] = useState([])
   const [liveAnswers, setLiveAnswers] = useState([])
+  const [editingParticipants, setEditingParticipants] = useState(false)
   const question = useCurrentQuestion(room)
   const stats = useQuestionStats(room, question)
 
@@ -1025,6 +1088,11 @@ function AdminRoom({ room, setRoom, onExit }) {
         { event: 'UPDATE', schema: 'public', table: 'participants', filter: `room_id=eq.${room.id}` },
         (payload) =>
           setParticipants((prev) => prev.map((p) => (p.id === payload.new.id ? payload.new : p))),
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'participants', filter: `room_id=eq.${room.id}` },
+        (payload) => setParticipants((prev) => prev.filter((p) => p.id !== payload.old.id)),
       )
       .subscribe()
     return () => supabase.removeChannel(channel)
@@ -1073,6 +1141,15 @@ function AdminRoom({ room, setRoom, onExit }) {
     setRoom(data)
   }
 
+  // El admin expulsa a un participante en el lobby (antes de empezar). El
+  // DELETE se propaga por realtime; aun así actualizamos el estado local para
+  // una respuesta inmediata.
+  const removeParticipant = async (id) => {
+    const { error } = await supabase.from('participants').delete().eq('id', id)
+    if (error) return alert(error.message)
+    setParticipants((prev) => prev.filter((p) => p.id !== id))
+  }
+
   // Cierra la pregunta para todos, ya sea porque el timer llegó a 0 o porque
   // el admin la saltó manualmente.
   const closeQuestion = () => updateRoom({ status: 'showing_results' })
@@ -1103,9 +1180,9 @@ function AdminRoom({ room, setRoom, onExit }) {
       <motion.div initial={enter.initial} animate={enter.animate} transition={enterTransition}>
         <Panel className="p-6 sm:p-8">
           <div className="flex items-center justify-between gap-3 border-b border-zinc-200 pb-4 dark:border-zinc-800">
-            <div className="flex items-baseline gap-2">
-              <span className="text-xs font-medium uppercase tracking-widest text-zinc-400">Sala</span>
-              <span className="font-mono text-lg font-bold tracking-widest">{room.id}</span>
+            <div className="flex min-w-0 items-baseline gap-2">
+              <span className="truncate text-lg font-bold">{room.name}</span>
+              <span className="font-mono text-sm font-semibold tracking-widest text-zinc-400">{room.id}</span>
             </div>
             <StatusBadge status={room.status} />
           </div>
@@ -1157,15 +1234,47 @@ function AdminRoom({ room, setRoom, onExit }) {
                   </span>
                 </div>
                 {participants.length > 0 && (
-                  <div className="flex flex-wrap justify-center gap-2">
-                    {participants.map((p) => (
-                      <span
-                        key={p.id}
-                        className="rounded-full border border-zinc-200 bg-white px-3 py-1 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+                  <div className="space-y-3">
+                    <div className="flex justify-center">
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        aria-pressed={editingParticipants}
+                        onClick={() => setEditingParticipants((v) => !v)}
                       >
-                        {p.username}
-                      </span>
-                    ))}
+                        {editingParticipants ? (
+                          <>
+                            <Check className="h-4 w-4" aria-hidden="true" />
+                            Hecho
+                          </>
+                        ) : (
+                          <>
+                            <Pencil className="h-4 w-4" aria-hidden="true" />
+                            Editar
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap justify-center gap-2">
+                      {participants.map((p) => (
+                        <span
+                          key={p.id}
+                          className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+                        >
+                          {p.username}
+                          {editingParticipants && (
+                            <button
+                              type="button"
+                              onClick={() => removeParticipant(p.id)}
+                              aria-label={`Expulsar a ${p.username}`}
+                              className="-mr-1 ml-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-rose-100 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 dark:hover:bg-rose-500/20 dark:hover:text-rose-400"
+                            >
+                              <X className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          )}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 )}
                 {questions.length === 0 && (
@@ -1326,18 +1435,25 @@ function AdminRoom({ room, setRoom, onExit }) {
 
 function ParticipantApp() {
   const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [participant, setParticipant] = useState(null)
   const [room, setRoom] = useState(null)
   const [selectedRoomId, setSelectedRoomId] = useState(null)
   const [openRooms, setOpenRooms] = useState([])
+  const [reloading, setReloading] = useState(false)
   const [error, setError] = useState('')
 
-  const loadOpenRooms = () => {
-    supabase
+  const loadOpenRooms = async () => {
+    setReloading(true)
+    const { data } = await supabase
       .from('rooms')
       .select('*')
       .eq('status', 'open')
-      .then(({ data }) => setOpenRooms(data ?? []))
+      .order('created_at', { ascending: false })
+    setOpenRooms(data ?? [])
+    // Mantiene la animación de recarga visible un instante aunque la consulta
+    // sea casi instantánea.
+    setTimeout(() => setReloading(false), 400)
   }
 
   useEffect(() => {
@@ -1346,7 +1462,8 @@ function ParticipantApp() {
   }, [participant])
 
   const usernameError = validateUsername(username)
-  const canJoin = !usernameError && !!selectedRoomId
+  const emailError = validateEmail(email)
+  const canJoin = !usernameError && !emailError && !!selectedRoomId
 
   const join = async () => {
     setError('')
@@ -1360,7 +1477,7 @@ function ParticipantApp() {
     if (r.status !== 'open') return setError('La sala ya no está abierta')
     const { data: p, error: pErr } = await supabase
       .from('participants')
-      .insert({ room_id: r.id, username: username.trim(), score: 0 })
+      .insert({ room_id: r.id, username: username.trim(), email: email.trim() || null, score: 0 })
       .select()
       .single()
     if (pErr) return setError(pErr.message)
@@ -1394,6 +1511,7 @@ function ParticipantApp() {
                   id="participant-name"
                   className="input pl-9"
                   placeholder="Tu nombre"
+                  maxLength={USERNAME_MAX_LENGTH}
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                 />
@@ -1407,10 +1525,34 @@ function ParticipantApp() {
             </div>
 
             <div>
+              <label htmlFor="participant-email" className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                Email <span className="font-normal text-zinc-400">(opcional)</span>
+              </label>
+              <div className="relative">
+                <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" aria-hidden="true" />
+                <input
+                  id="participant-email"
+                  type="email"
+                  className="input pl-9"
+                  placeholder="tucorreo@ejemplo.com"
+                  maxLength={EMAIL_MAX_LENGTH}
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+              </div>
+              {email.trim() && emailError && (
+                <p className="mt-1.5 flex items-center gap-1.5 text-sm text-amber-600 dark:text-amber-400">
+                  <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  {emailError}
+                </p>
+              )}
+            </div>
+
+            <div>
               <div className="mb-2 flex items-center justify-between">
                 <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Elige una sala:</p>
-                <button type="button" onClick={loadOpenRooms} className="btn-ghost">
-                  <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                <button type="button" onClick={loadOpenRooms} disabled={reloading} className="btn-ghost">
+                  <RefreshCw className={`h-4 w-4 ${reloading ? 'animate-spin' : ''}`} aria-hidden="true" />
                   Recargar salas
                 </button>
               </div>
@@ -1420,17 +1562,26 @@ function ParticipantApp() {
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-2">
-                  {openRooms.map((r) => (
-                    <button
-                      key={r.id}
-                      type="button"
-                      aria-pressed={selectedRoomId === r.id}
-                      onClick={() => setSelectedRoomId(r.id)}
-                      className={`text-center font-mono tracking-widest ${selectClasses(selectedRoomId === r.id)}`}
-                    >
-                      {r.id}
-                    </button>
-                  ))}
+                  {openRooms.map((r) => {
+                    const active = selectedRoomId === r.id
+                    return (
+                      <button
+                        key={r.id}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => setSelectedRoomId(r.id)}
+                        className={`flex flex-col items-center gap-0.5 text-center ${selectClasses(active)}`}
+                      >
+                        <span className="w-full truncate font-semibold">{r.name}</span>
+                        <span className={`font-mono text-xs tracking-widest ${active ? 'text-indigo-100' : 'text-zinc-400'}`}>
+                          {r.id}
+                        </span>
+                        <span className={`text-xs ${active ? 'text-indigo-100' : 'text-zinc-400'}`}>
+                          {formatRelativeTime(r.created_at)}
+                        </span>
+                      </button>
+                    )
+                  })}
                 </div>
               )}
             </div>
