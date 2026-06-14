@@ -37,6 +37,7 @@ create table participants (
   id uuid primary key default gen_random_uuid(),
   room_id text not null references rooms(id) on delete cascade,
   username text not null,
+  email text, -- opcional: el participante puede dejarlo en blanco
   score int not null default 0,
   created_at timestamptz not null default now()
 );
@@ -100,6 +101,7 @@ grant insert, update on rooms to authenticated;
 
 grant select on participants to anon, authenticated;
 grant insert on participants to anon;
+grant delete on participants to authenticated;
 
 grant select, insert, update, delete on questions to authenticated;
 
@@ -146,6 +148,20 @@ create policy "participants_insert_if_room_open" on participants
   for insert
   with check (
     exists (select 1 from rooms where rooms.id = participants.room_id and rooms.status = 'open')
+  );
+
+-- El admin dueño de la sala puede expulsar participantes en el lobby (antes de
+-- que empiece el juego); no se permite una vez que la sala arranca para no
+-- alterar el ranking en curso.
+create policy "participants_delete_own_room_lobby" on participants
+  for delete to authenticated
+  using (
+    exists (
+      select 1 from rooms
+      where rooms.id = participants.room_id
+        and rooms.admin_id = auth.uid()
+        and rooms.status in ('waiting', 'open', 'closed')
+    )
   );
 
 -- questions: banco de preguntas privado de cada admin (CRUD completo sobre
@@ -308,3 +324,9 @@ grant execute on function cleanup_finished_room(text) to authenticated;
 alter publication supabase_realtime add table rooms;
 alter publication supabase_realtime add table participants;
 alter publication supabase_realtime add table answers;
+
+-- Con la replica identity por defecto (solo la PK), el evento DELETE de
+-- participants solo trae el id, así que un canal con filtro room_id=eq.X no lo
+-- recibiría. FULL incluye la fila completa para que el filtro de expulsión en
+-- el lobby del admin funcione.
+alter table participants replica identity full;

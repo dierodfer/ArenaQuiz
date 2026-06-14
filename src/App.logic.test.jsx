@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { generateRoomCode, useQuestionTimer, validateUsername } from './App'
+import { generateRoomCode, useQuestionTimer, validateUsername, validateEmail } from './App'
 
 // App.jsx importa supabaseClient a nivel de módulo; lo mockeamos para que
 // createClient no falle al no haber credenciales reales en el entorno de test.
@@ -41,6 +41,33 @@ describe('validateUsername', () => {
   it('no bloquea nombres legítimos que contienen una mala palabra como subcadena', () => {
     expect(validateUsername('Mariano')).toBeNull()
     expect(validateUsername('Calculo')).toBeNull()
+  })
+
+  it('rechaza nombres de más de 10 caracteres', () => {
+    expect(validateUsername('Maximiliano')).toBeTruthy() // 11
+    expect(validateUsername('abcdefghij')).toBeNull() // 10, límite exacto
+  })
+})
+
+describe('validateEmail', () => {
+  it('acepta vacío (es opcional)', () => {
+    expect(validateEmail('')).toBeNull()
+    expect(validateEmail('   ')).toBeNull()
+  })
+
+  it('acepta emails con formato válido', () => {
+    expect(validateEmail('ana@example.com')).toBeNull()
+    expect(validateEmail('  pedro.lopez@correo.es ')).toBeNull()
+  })
+
+  it('rechaza formatos inválidos', () => {
+    expect(validateEmail('no-es-un-email')).toBeTruthy()
+    expect(validateEmail('falta@dominio')).toBeTruthy()
+    expect(validateEmail('@sinnombre.com')).toBeTruthy()
+  })
+
+  it('rechaza emails de más de 50 caracteres', () => {
+    expect(validateEmail(`${'a'.repeat(45)}@b.com`)).toBeTruthy() // 51
   })
 })
 
