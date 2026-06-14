@@ -36,7 +36,7 @@ Convención deliberada: la app vive en un solo archivo `src/App.jsx`. No la divi
 
 ## Modelo de datos (5 tablas)
 
-- `rooms`: `id` (texto, código de 6 chars generado en cliente), `admin_id` (uuid, FK a `auth.users`), `status`, `current_question_index`, `time_per_question`.
+- `rooms`: `id` (texto, código de 6 chars generado en cliente), `admin_id` (uuid, FK a `auth.users`), `name` (obligatorio, máx. 25 chars, validado en cliente con `validateRoomName` y por `check` en BD), `status`, `current_question_index`, `time_per_question`.
 - `participants`: FK a room, `username` (3-10 chars, validado en cliente con `validateUsername`), `email` (opcional, máx. 50 chars, `validateEmail`), `score`. El admin dueño puede expulsar participantes en el lobby (botón "Editar" en `AdminRoom`, estado `open`); el DELETE se propaga por realtime (`replica identity full` para que el filtro por `room_id` reciba el evento).
 - `questions`: **banco de preguntas del admin, desacoplado de las salas**. `admin_id` (uuid, FK a `auth.users`), `category` (texto libre, default `'General'`), `title`, `options` (jsonb, array de 4 textos), `correct_answer` (letra A-D). Una pregunta se crea una vez y se reutiliza en cualquier sala propia.
 - `room_questions`: tabla de unión sala↔pregunta. FK a room y question, `question_number` (0-based, igual a `current_question_index`). Define qué preguntas y en qué orden juega cada sala. Unique por `(room_id, question_number)` y `(room_id, question_id)`.

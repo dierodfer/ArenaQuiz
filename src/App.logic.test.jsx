@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { generateRoomCode, useQuestionTimer, validateUsername, validateEmail } from './App'
+import {
+  generateRoomCode,
+  useQuestionTimer,
+  validateUsername,
+  validateEmail,
+  validateRoomName,
+  formatRelativeTime,
+} from './App'
 
 // App.jsx importa supabaseClient a nivel de módulo; lo mockeamos para que
 // createClient no falle al no haber credenciales reales en el entorno de test.
@@ -68,6 +75,41 @@ describe('validateEmail', () => {
 
   it('rechaza emails de más de 50 caracteres', () => {
     expect(validateEmail(`${'a'.repeat(45)}@b.com`)).toBeTruthy() // 51
+  })
+})
+
+describe('validateRoomName', () => {
+  it('rechaza nombres vacíos', () => {
+    expect(validateRoomName('')).toBeTruthy()
+    expect(validateRoomName('   ')).toBeTruthy()
+  })
+
+  it('acepta nombres no vacíos de hasta 25 caracteres', () => {
+    expect(validateRoomName('Trivia de empresa')).toBeNull()
+    expect(validateRoomName('a'.repeat(25))).toBeNull()
+  })
+
+  it('rechaza nombres de más de 25 caracteres', () => {
+    expect(validateRoomName('a'.repeat(26))).toBeTruthy()
+  })
+})
+
+describe('formatRelativeTime', () => {
+  const now = new Date('2026-06-14T10:00:00Z').getTime()
+  const minsAgo = (m) => new Date(now - m * 60000).toISOString()
+
+  it('muestra "<1 min" para menos de un minuto', () => {
+    expect(formatRelativeTime(minsAgo(0), now)).toBe('hace <1 min')
+  })
+
+  it('muestra los minutos transcurridos', () => {
+    expect(formatRelativeTime(minsAgo(3), now)).toBe('hace 3 min')
+    expect(formatRelativeTime(minsAgo(59), now)).toBe('hace 59 min')
+  })
+
+  it('pasa a horas a partir de 60 min', () => {
+    expect(formatRelativeTime(minsAgo(60), now)).toBe('hace 1 h')
+    expect(formatRelativeTime(minsAgo(150), now)).toBe('hace 2 h')
   })
 })
 

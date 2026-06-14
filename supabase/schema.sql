@@ -26,6 +26,7 @@ drop function if exists cleanup_finished_room(text);
 create table rooms (
   id text primary key, -- código de 6 chars generado en cliente
   admin_id uuid not null references auth.users(id) on delete cascade,
+  name text not null check (char_length(name) between 1 and 25),
   status text not null default 'waiting'
     check (status in ('waiting', 'open', 'closed', 'in_question', 'showing_results', 'finished')),
   current_question_index int not null default 0,
