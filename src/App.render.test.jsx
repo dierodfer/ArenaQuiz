@@ -50,7 +50,7 @@ beforeEach(() => {
 describe('App', () => {
   it('muestra la pantalla de selección de rol al cargar', () => {
     render(<App />)
-    expect(screen.getByText('🎯 ArenaQuiz')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'ArenaQuiz', level: 1 })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Soy Admin' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Soy Participante' })).toBeInTheDocument()
   })
