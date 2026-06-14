@@ -9,6 +9,7 @@ ArenaQuiz es una app tipo Kahoot para encuestas en tiempo real: un admin crea un
 ## Stack y comandos
 
 - React 19 + Vite 8, Tailwind CSS v4 (vía `@tailwindcss/vite`, sin `tailwind.config.js`/`postcss.config.js`), `@supabase/supabase-js` v2.
+- UI: `lucide-react` (iconografía) y `framer-motion` (animaciones de entrada/feedback). Mantén las animaciones ligeras (solo opacidad/transform); el podio del ranking solo anima el top 3 para no lanzar cientos de animaciones con muchos participantes.
 - `npm run dev` — servidor de desarrollo.
 - `npm run build` — build de producción (úsalo para verificar que compila).
 - `npm run test` — corre los tests con Vitest (modo run, no watch). `npm run test:watch` para modo watch.
@@ -86,8 +87,11 @@ waiting → open → closed → in_question ⇄ showing_results → finished
 ## Convenciones
 
 - UI en español; código (variables, funciones) en inglés.
-- Estilos solo con Tailwind; las clases compartidas `.input` y `.btn` están en `index.css`.
-- Las letras A-D y sus colores viven en las constantes `LETTERS` y `LETTER_COLORS` de `App.jsx`; `options[i]` se corresponde con `LETTERS[i]`.
+- Estilos solo con Tailwind; las clases compartidas `.input`/`.btn`/`.btn-secondary`/`.btn-ghost` están en `index.css`.
+- Paleta neutra (`zinc`) + un único acento (`indigo`). Evita colores saturados salvo en las 4 respuestas (`LETTER_META`), que combinan color + forma + letra por accesibilidad.
+- Tema claro/oscuro por clase `.dark` en `<html>` (variante Tailwind v4 `@custom-variant dark` en `index.css`). El hook `useTheme` la sincroniza y persiste en `localStorage` (`aq-theme`); un script inline en `index.html` la aplica antes de pintar para evitar parpadeo. Usa siempre variantes `dark:` en el JSX.
+- Primitivas de UI reutilizables en `App.jsx`: `Stage` (ancho), `Panel`, `ScreenHeader`, `MenuCard`, `StatusBadge`, `Stat`, `RoomCode`, `selectClasses` (botones de selección única). La vista de sala (`AdminRoom`) usa `Stage wide` por estar pensada para proyección.
+- Las letras A-D, sus colores y formas viven en `LETTERS` y `LETTER_META` de `App.jsx`; `options[i]` se corresponde con `LETTERS[i]`.
 - Si cambias el esquema de BD, actualiza `supabase/schema.sql` (es la referencia canónica; no hay migraciones).
 
 ## Tests
