@@ -58,6 +58,7 @@ Las tablas `rooms`, `participants` y `answers` están en la publicación `supaba
   - `get_question_stats(p_question_id)`: devuelve `{ total, correct }` agregados, sin exponer respuestas individuales.
   - `submit_answer(p_question_id, p_participant_id, p_answer)`: inserta la respuesta, calcula `is_correct` en el servidor y suma +100 al score si es correcta de forma atómica. El cliente nunca decide si acertó ni el nuevo score.
 - `useCurrentQuestion` y `useQuestionStats` (compartidos por admin y participante) llaman siempre a estas RPC, no a las tablas directamente. El admin sí lee `questions`/`room_questions`/`answers` directamente en `QuestionBank`, `CreateRoom` y el tally en vivo de `AdminRoom` (permitido por RLS al ser el dueño).
+- `cleanup_finished_room(p_room_id)`: al llegar a `finished`, borra `room_questions` y `answers` de esa sala (conserva `rooms`/`participants` para el ranking y `questions`, que es el banco del admin). Solo el admin dueño puede ejecutarla, y solo si la sala ya está `finished`.
 - Si añades nuevas queries desde el cliente, comprueba si necesitan política RLS nueva en `schema.sql` o si deben pasar por una función `security definer`.
 
 ## Máquina de estados de la sala (crítico)
@@ -71,8 +72,9 @@ waiting → open → closed → in_question ⇄ showing_results → finished
 - Las preguntas NO se crean dentro de la sala: el admin las gestiona antes en el **banco** (`QuestionBank`) y al **crear la sala** (`CreateRoom`) elige una categoría y, dentro de ella, las preguntas concretas (el orden de selección es el orden de juego). Esto inserta las filas de `room_questions`.
 - `waiting`: la sala ya tiene sus preguntas elegidas; el admin las ve en modo lectura y puede abrirla.
 - `open`: los participantes pueden unirse (se valida en el join).
-- `in_question` → `showing_results`: lo dispara automáticamente el timer del ADMIN al llegar a 0.
+- `in_question` → `showing_results`: lo dispara automáticamente el timer del ADMIN al llegar a 0, o manualmente el admin con el botón "Saltar pregunta" (`closeQuestion`, misma transición que `onTimeUp`).
 - `showing_results` → `in_question`: botón "Siguiente" incrementa `current_question_index` y vuelve a `in_question` en el mismo UPDATE. Si no quedan preguntas → `finished`.
+- Al llegar a `finished`, el admin llama además a `cleanup_finished_room` (RPC) para borrar los datos efímeros de la sala (ver sección RLS).
 
 ## Arquitectura de eventos y timing
 
