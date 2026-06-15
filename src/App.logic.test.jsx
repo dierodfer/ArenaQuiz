@@ -7,6 +7,7 @@ import {
   validateEmail,
   validateRoomName,
   formatRelativeTime,
+  parseQuestionImport,
 } from './App'
 
 // App.jsx importa supabaseClient a nivel de módulo; lo mockeamos para que
@@ -110,6 +111,90 @@ describe('formatRelativeTime', () => {
   it('pasa a horas a partir de 60 min', () => {
     expect(formatRelativeTime(minsAgo(60), now)).toBe('hace 1 h')
     expect(formatRelativeTime(minsAgo(150), now)).toBe('hace 2 h')
+  })
+})
+
+describe('parseQuestionImport', () => {
+  const adminId = 'admin-uid'
+
+  it('rechaza JSON inválido', () => {
+    expect(parseQuestionImport('no es json', adminId).error).toBeTruthy()
+  })
+
+  it('exige el campo "titulo"', () => {
+    expect(parseQuestionImport(JSON.stringify({ preguntas: [] }), adminId).error).toBeTruthy()
+  })
+
+  it('exige un array "preguntas" no vacío', () => {
+    expect(parseQuestionImport(JSON.stringify({ titulo: 'X', preguntas: [] }), adminId).error).toBeTruthy()
+  })
+
+  it('importa preguntas válidas con 4 y 3 opciones, usando el titulo como categoría', () => {
+    const json = JSON.stringify({
+      titulo: 'Agentic Programming Fundamentals',
+      preguntas: [
+        {
+          id: 1,
+          pregunta: '¿Qué deberías hacer?',
+          opciones: ['A1', 'A2', 'A3', 'A4'],
+          respuesta_correcta: 'A3',
+        },
+        {
+          id: 2,
+          pregunta: '¿Qué aportaría más valor?',
+          opciones: ['B1', 'B2', 'B3'],
+          respuesta_correcta: 'B3',
+        },
+      ],
+    })
+
+    const { rows, category, error } = parseQuestionImport(json, adminId)
+    expect(error).toBeUndefined()
+    expect(category).toBe('Agentic Programming Fundamentals')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toEqual({
+      admin_id: adminId,
+      category: 'Agentic Programming Fundamentals',
+      title: '¿Qué deberías hacer?',
+      options: ['A1', 'A2', 'A3', 'A4'],
+      correct_answer: 'C',
+    })
+    expect(rows[1]).toEqual({
+      admin_id: adminId,
+      category: 'Agentic Programming Fundamentals',
+      title: '¿Qué aportaría más valor?',
+      options: ['B1', 'B2', 'B3'],
+      correct_answer: 'C',
+    })
+  })
+
+  it('rechaza una pregunta sin "pregunta"', () => {
+    const json = JSON.stringify({
+      titulo: 'X',
+      preguntas: [{ opciones: ['A', 'B'], respuesta_correcta: 'A' }],
+    })
+    expect(parseQuestionImport(json, adminId).error).toMatch(/Pregunta 1/)
+  })
+
+  it('rechaza preguntas con menos de 2 o más de 4 opciones', () => {
+    const tooFew = JSON.stringify({
+      titulo: 'X',
+      preguntas: [{ pregunta: 'P', opciones: ['A'], respuesta_correcta: 'A' }],
+    })
+    const tooMany = JSON.stringify({
+      titulo: 'X',
+      preguntas: [{ pregunta: 'P', opciones: ['A', 'B', 'C', 'D', 'E'], respuesta_correcta: 'A' }],
+    })
+    expect(parseQuestionImport(tooFew, adminId).error).toMatch(/Pregunta 1/)
+    expect(parseQuestionImport(tooMany, adminId).error).toMatch(/Pregunta 1/)
+  })
+
+  it('rechaza si "respuesta_correcta" no coincide con ninguna opción', () => {
+    const json = JSON.stringify({
+      titulo: 'X',
+      preguntas: [{ pregunta: 'P', opciones: ['A', 'B'], respuesta_correcta: 'C' }],
+    })
+    expect(parseQuestionImport(json, adminId).error).toMatch(/respuesta_correcta/)
   })
 })
 

@@ -4,7 +4,7 @@ import {
   Sun, Moon, Target, Loader2, LogIn, Mail, Lock, Unlock, Plus, Library, LogOut,
   ArrowLeft, Tag, Trash2, Clock, ListChecks, Users, User, Play, Copy, Check, X, Pencil,
   RefreshCw, Trophy, Medal, Crown, CheckCircle2, XCircle, MinusCircle, AlertCircle,
-  ChevronRight, Triangle, Diamond, Circle, Square, Eye, SkipForward,
+  ChevronRight, Triangle, Diamond, Circle, Square, Eye, SkipForward, Upload, ChevronDown,
 } from 'lucide-react'
 import { supabase } from './supabaseClient'
 // Listas públicas de palabras ofensivas (paquete `naughty-words`). Viven en
@@ -105,6 +105,56 @@ export function formatRelativeTime(iso, now = Date.now()) {
   if (min < 60) return `hace ${min} min`
   const h = Math.floor(min / 60)
   return `hace ${h} h`
+}
+
+// Parsea y valida el JSON de importación de preguntas al banco. Formato
+// esperado: { titulo, preguntas: [{ pregunta, opciones, respuesta_correcta }] }.
+// `titulo` se usa como categoría para todas las preguntas. Cada pregunta
+// admite entre 2 y 4 `opciones`; `respuesta_correcta` debe coincidir
+// (texto exacto) con una de ellas y se traduce a su letra A-D según la
+// posición. Devuelve { rows, category } listo para insertar en `questions`,
+// o { error } con un mensaje localizado a la primera pregunta inválida.
+export function parseQuestionImport(jsonText, adminId) {
+  let data
+  try {
+    data = JSON.parse(jsonText)
+  } catch {
+    return { error: 'El texto no es JSON válido.' }
+  }
+  if (!data || typeof data.titulo !== 'string' || !data.titulo.trim()) {
+    return { error: 'Falta el campo "titulo" (se usa como categoría).' }
+  }
+  if (!Array.isArray(data.preguntas) || data.preguntas.length === 0) {
+    return { error: 'Falta el campo "preguntas" (debe ser un array no vacío).' }
+  }
+
+  const category = data.titulo.trim()
+  const rows = []
+  for (let i = 0; i < data.preguntas.length; i++) {
+    const q = data.preguntas[i]
+    const n = i + 1
+    const title = typeof q?.pregunta === 'string' ? q.pregunta.trim() : ''
+    if (!title) return { error: `Pregunta ${n}: falta "pregunta".` }
+
+    const options = Array.isArray(q?.opciones) ? q.opciones.map((o) => String(o).trim()) : []
+    if (options.length < 2 || options.length > 4 || options.some((o) => !o)) {
+      return { error: `Pregunta ${n}: "opciones" debe tener entre 2 y 4 textos no vacíos.` }
+    }
+
+    const correctIndex = options.indexOf(String(q?.respuesta_correcta ?? '').trim())
+    if (correctIndex === -1) {
+      return { error: `Pregunta ${n}: "respuesta_correcta" no coincide con ninguna de "opciones".` }
+    }
+
+    rows.push({
+      admin_id: adminId,
+      category,
+      title,
+      options,
+      correct_answer: LETTERS[correctIndex],
+    })
+  }
+  return { rows, category }
 }
 
 // Timer cliente: fase "lea" de 3s sin timer visible, luego cuenta atrás oficial.
@@ -693,6 +743,10 @@ function QuestionBank({ session, onBack }) {
   const [correct, setCorrect] = useState('A')
   const [category, setCategory] = useState('')
   const [error, setError] = useState('')
+  const [showImport, setShowImport] = useState(false)
+  const [importText, setImportText] = useState('')
+  const [importError, setImportError] = useState('')
+  const [importSuccess, setImportSuccess] = useState('')
 
   useEffect(() => {
     supabase
@@ -733,6 +787,23 @@ function QuestionBank({ session, onBack }) {
     const { error: delErr } = await supabase.from('questions').delete().eq('id', id)
     if (delErr) return setError(delErr.message)
     setQuestions((prev) => prev.filter((q) => q.id !== id))
+  }
+
+  const importQuestions = async () => {
+    setImportError('')
+    setImportSuccess('')
+    const { rows, category: importedCategory, error: parseErr } = parseQuestionImport(
+      importText,
+      session.user.id,
+    )
+    if (parseErr) return setImportError(parseErr)
+    const { data, error: insErr } = await supabase.from('questions').insert(rows).select()
+    if (insErr) return setImportError(insErr.message)
+    setQuestions((prev) => [...prev, ...data])
+    setImportSuccess(
+      `Se importaron ${data.length} ${data.length === 1 ? 'pregunta' : 'preguntas'} en "${importedCategory}".`,
+    )
+    setImportText('')
   }
 
   // Agrupadas por categoría para mostrarlas.
@@ -817,6 +888,63 @@ function QuestionBank({ session, onBack }) {
               Guardar pregunta
             </button>
           </form>
+
+          <div className="rounded-xl border border-zinc-200 dark:border-zinc-800">
+            <button
+              type="button"
+              aria-expanded={showImport}
+              onClick={() => setShowImport((v) => !v)}
+              className="flex w-full items-center justify-between gap-2 p-4 text-left text-sm font-semibold"
+            >
+              <span className="inline-flex items-center gap-1.5">
+                <Upload className="h-4 w-4 text-zinc-400" aria-hidden="true" />
+                Importar preguntas desde JSON
+              </span>
+              <ChevronDown
+                className={`h-4 w-4 text-zinc-400 transition-transform ${showImport ? 'rotate-180' : ''}`}
+                aria-hidden="true"
+              />
+            </button>
+            {showImport && (
+              <div className="space-y-3 border-t border-zinc-200 p-4 dark:border-zinc-800">
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Pega un JSON con el formato{' '}
+                  <code className="rounded bg-zinc-100 px-1 py-0.5 dark:bg-zinc-800">
+                    {'{ "titulo", "preguntas": [{ "pregunta", "opciones", "respuesta_correcta" }] }'}
+                  </code>
+                  . El "titulo" se usa como categoría para todas las preguntas; cada pregunta admite de 2 a 4
+                  opciones.
+                </p>
+                <textarea
+                  className="input min-h-40 font-mono text-xs"
+                  placeholder='{"titulo": "Mi categoría", "preguntas": [...]}'
+                  value={importText}
+                  onChange={(e) => setImportText(e.target.value)}
+                />
+                {importError && (
+                  <p className="flex items-center gap-1.5 text-sm text-rose-600 dark:text-rose-400">
+                    <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    {importError}
+                  </p>
+                )}
+                {importSuccess && (
+                  <p className="flex items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400">
+                    <Check className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    {importSuccess}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  disabled={!importText.trim()}
+                  onClick={importQuestions}
+                >
+                  <Upload className="h-4 w-4" aria-hidden="true" />
+                  Importar
+                </button>
+              </div>
+            )}
+          </div>
 
           <div className="space-y-3">
             <p className="text-sm font-semibold">Tus preguntas ({questions.length})</p>
@@ -1693,7 +1821,8 @@ function ParticipantRoom({ room, setRoom, participant }) {
                 animate="show"
                 className="grid grid-cols-1 gap-3 sm:grid-cols-2"
               >
-                {LETTERS.map((l, i) => {
+                {question.options.map((opt, i) => {
+                  const l = LETTERS[i]
                   const { Icon, solid, hover } = LETTER_META[l]
                   const selected = myAnswer?.answer === l
                   return (
@@ -1703,7 +1832,7 @@ function ParticipantRoom({ room, setRoom, participant }) {
                       whileTap={disabled ? undefined : { scale: 0.97 }}
                       disabled={disabled}
                       onClick={() => answer(l)}
-                      aria-label={`Opción ${l}: ${question.options[i]}`}
+                      aria-label={`Opción ${l}: ${opt}`}
                       className={`relative flex min-h-[5rem] items-center gap-3 rounded-2xl p-4 text-left text-white shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-50 ${solid} ${disabled ? '' : hover} ${
                         selected ? 'ring-4 ring-white ring-offset-2 ring-offset-zinc-50 dark:ring-offset-zinc-950' : ''
                       }`}
@@ -1713,7 +1842,7 @@ function ParticipantRoom({ room, setRoom, participant }) {
                       </span>
                       <span className="font-semibold leading-snug">
                         <span className="mr-1 opacity-80">{l}.</span>
-                        <NoCopy>{question.options[i]}</NoCopy>
+                        <NoCopy>{opt}</NoCopy>
                       </span>
                       {selected && <Check className="ml-auto h-5 w-5 shrink-0" aria-hidden="true" />}
                     </motion.button>
