@@ -38,7 +38,7 @@ Convención deliberada: la app vive en un solo archivo `src/App.jsx`. No la divi
 
 - `rooms`: `id` (texto, código de 6 chars generado en cliente), `admin_id` (uuid, FK a `auth.users`), `name` (obligatorio, máx. 25 chars, validado en cliente con `validateRoomName` y por `check` en BD), `status`, `current_question_index`, `time_per_question`.
 - `participants`: FK a room, `username` (3-10 chars, validado en cliente con `validateUsername`), `email` (opcional, máx. 50 chars, `validateEmail`), `score`. El admin dueño puede expulsar participantes en el lobby (botón "Editar" en `AdminRoom`, estado `open`); el DELETE se propaga por realtime (`replica identity full` para que el filtro por `room_id` reciba el evento).
-- `questions`: **banco de preguntas del admin, desacoplado de las salas**. `admin_id` (uuid, FK a `auth.users`), `category` (texto libre, default `'General'`), `title`, `options` (jsonb, array de 4 textos), `correct_answer` (letra A-D). Una pregunta se crea una vez y se reutiliza en cualquier sala propia.
+- `questions`: **banco de preguntas del admin, desacoplado de las salas**. `admin_id` (uuid, FK a `auth.users`), `category` (texto libre, default `'General'`), `title`, `options` (jsonb, array de 2 a 4 textos — el formulario manual siempre crea 4, la importación JSON admite 2-4), `correct_answer` (letra A-D según la posición en `options`). Una pregunta se crea una vez y se reutiliza en cualquier sala propia. La UI (`AnswerBreakdown`, `ParticipantRoom`) itera sobre `question.options`, no sobre `LETTERS` fijo, para soportar menos de 4 opciones.
 - `room_questions`: tabla de unión sala↔pregunta. FK a room y question, `question_number` (0-based, igual a `current_question_index`). Define qué preguntas y en qué orden juega cada sala. Unique por `(room_id, question_number)` y `(room_id, question_id)`.
 - `answers`: FK a question y participant, `answer` (letra), `is_correct`. Unique por (question_id, participant_id).
 
@@ -95,6 +95,7 @@ waiting → open → closed → in_question ⇄ showing_results → finished
 - Primitivas de UI reutilizables en `App.jsx`: `Stage` (ancho), `Panel`, `ScreenHeader`, `MenuCard`, `StatusBadge`, `Stat`, `RoomCode`, `selectClasses` (botones de selección única). La vista de sala (`AdminRoom`) usa `Stage wide` por estar pensada para proyección.
 - Las letras A-D, sus colores y formas viven en `LETTERS` y `LETTER_META` de `App.jsx`; `options[i]` se corresponde con `LETTERS[i]`.
 - Si cambias el esquema de BD, actualiza `supabase/schema.sql` (es la referencia canónica; no hay migraciones).
+- `QuestionBank` permite importar preguntas en lote pegando un JSON con forma `{ titulo, preguntas: [{ pregunta, opciones, respuesta_correcta }] }` (ver `parseQuestionImport`, exportada y testeada). `titulo` se usa como `category` para todas las preguntas importadas; `respuesta_correcta` debe coincidir textualmente con una de `opciones` (2-4) y se traduce a su letra A-D por posición. El parseo es todo-o-nada: si una pregunta del array es inválida, no se inserta ninguna.
 
 ## Tests
 
