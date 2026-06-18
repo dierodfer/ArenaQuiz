@@ -31,6 +31,7 @@ create table rooms (
     check (status in ('waiting', 'open', 'closed', 'in_question', 'showing_results', 'finished')),
   current_question_index int not null default 0,
   time_per_question int not null default 15,
+  finish_message text default '' check (char_length(finish_message) <= 100),
   created_at timestamptz not null default now()
 );
 

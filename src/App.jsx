@@ -5,6 +5,7 @@ import {
   ArrowLeft, Tag, Trash2, Clock, ListChecks, Users, User, Play, Copy, Check, X, Pencil,
   RefreshCw, Trophy, Medal, Crown, CheckCircle2, XCircle, MinusCircle, AlertCircle,
   ChevronRight, Triangle, Diamond, Circle, Square, Eye, SkipForward, Upload, ChevronDown, Home,
+  MessageSquare,
 } from 'lucide-react'
 import { supabase } from './supabaseClient'
 // Listas públicas de palabras ofensivas (paquete `naughty-words`). Viven en
@@ -35,6 +36,7 @@ const USERNAME_MIN_LENGTH = 3
 const USERNAME_MAX_LENGTH = 10
 const EMAIL_MAX_LENGTH = 50
 const ROOM_NAME_MAX_LENGTH = 25
+const FINISH_MESSAGE_MAX_LENGTH = 100
 
 // Marcas diacríticas combinantes (acentos) en Unicode, para poder quitarlas.
 const DIACRITICS = new RegExp('[\\u0300-\\u036f]', 'g')
@@ -548,7 +550,7 @@ function RankRow({ rank, p, highlight }) {
   )
 }
 
-function Ranking({ roomId, highlightId }) {
+function Ranking({ roomId, highlightId, finishMessage }) {
   const [rows, setRows] = useState([])
   useEffect(() => {
     supabase
@@ -571,6 +573,9 @@ function Ranking({ roomId, highlightId }) {
           <Trophy className="h-6 w-6" aria-hidden="true" />
         </span>
         <h2 className="text-2xl font-bold tracking-tight">Ranking final</h2>
+        {finishMessage && (
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">{finishMessage}</p>
+        )}
       </div>
       {rows.length === 0 ? (
         <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">Sin participantes.</p>
@@ -1013,6 +1018,7 @@ function CreateRoom({ session, setRoom, onBack }) {
   const [questions, setQuestions] = useState([])
   const [category, setCategory] = useState('')
   const [selectedIds, setSelectedIds] = useState([]) // en orden de selección
+  const [finishMessage, setFinishMessage] = useState('')
   const [error, setError] = useState('')
 
   const nameError = validateRoomName(name)
@@ -1038,6 +1044,15 @@ function CreateRoom({ session, setRoom, onBack }) {
   const toggle = (id) =>
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
 
+  const allSelected = inCategory.length > 0 && inCategory.every((q) => selectedIds.includes(q.id))
+  const toggleAll = () => {
+    if (allSelected) {
+      setSelectedIds([])
+    } else {
+      setSelectedIds(inCategory.map((q) => q.id))
+    }
+  }
+
   const createRoom = async () => {
     setError('')
     if (!canCreate) return
@@ -1051,6 +1066,7 @@ function CreateRoom({ session, setRoom, onBack }) {
         status: 'waiting',
         current_question_index: 0,
         time_per_question: timePerQuestion,
+        finish_message: finishMessage.trim(),
       })
       .select()
       .single()
@@ -1116,6 +1132,26 @@ function CreateRoom({ session, setRoom, onBack }) {
             </div>
 
             <div>
+              <label htmlFor="finish-message" className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                <span className="flex items-center gap-1.5">
+                  <MessageSquare className="h-4 w-4 text-zinc-400" aria-hidden="true" />
+                  Mensaje final <span className="font-normal text-zinc-400">(opcional)</span>
+                </span>
+              </label>
+              <input
+                id="finish-message"
+                className="input"
+                placeholder="p.ej. ¡Gracias por participar!"
+                maxLength={FINISH_MESSAGE_MAX_LENGTH}
+                value={finishMessage}
+                onChange={(e) => setFinishMessage(e.target.value)}
+              />
+              <p className="mt-1 text-right text-xs text-zinc-400">
+                {finishMessage.trim().length}/{FINISH_MESSAGE_MAX_LENGTH}
+              </p>
+            </div>
+
+            <div>
               <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">
                 <Tag className="h-4 w-4 text-zinc-400" aria-hidden="true" />
                 Categoría
@@ -1143,11 +1179,18 @@ function CreateRoom({ session, setRoom, onBack }) {
 
             {category && (
               <div>
-                <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                  <ListChecks className="h-4 w-4 text-zinc-400" aria-hidden="true" />
-                  Preguntas
-                  <span className="font-normal text-zinc-400">· {selectedIds.length} seleccionadas (el orden es el de juego)</span>
-                </p>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="flex items-center gap-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                    <ListChecks className="h-4 w-4 text-zinc-400" aria-hidden="true" />
+                    Preguntas
+                    <span className="font-normal text-zinc-400">· {selectedIds.length} seleccionadas (el orden es el de juego)</span>
+                  </p>
+                  {inCategory.length > 1 && (
+                    <button type="button" className="btn-ghost text-xs" onClick={toggleAll}>
+                      {allSelected ? 'Deseleccionar todas' : 'Seleccionar todas'}
+                    </button>
+                  )}
+                </div>
                 <div className="space-y-2">
                   {inCategory.map((q) => {
                     const order = selectedIds.indexOf(q.id)
@@ -1586,7 +1629,7 @@ function AdminRoom({ room, setRoom, onExit }) {
 
             {room.status === 'finished' && (
               <div className="space-y-6">
-                <Ranking roomId={room.id} />
+                <Ranking roomId={room.id} finishMessage={room.finish_message} />
                 <div className="mx-auto max-w-sm">
                   <button className="btn-secondary" onClick={onExit}>
                     <ArrowLeft className="h-4 w-4" aria-hidden="true" />
@@ -1955,7 +1998,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
 
           {room.status === 'finished' && (
             <div className="space-y-6">
-              <Ranking roomId={room.id} highlightId={participant.id} />
+              <Ranking roomId={room.id} highlightId={participant.id} finishMessage={room.finish_message} />
               <div className="mx-auto max-w-sm">
                 <button className="btn-secondary" onClick={onHome}>
                   <Home className="h-4 w-4" aria-hidden="true" />
