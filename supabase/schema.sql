@@ -32,6 +32,12 @@ create table rooms (
   current_question_index int not null default 0,
   time_per_question int not null default 15,
   finish_message text default '' check (char_length(finish_message) <= 100),
+  -- URLs públicas (Supabase Storage, bucket room-images) de imágenes opcionales.
+  -- logo_image sustituye al branding de la app dentro de la sala; finish_image
+  -- se muestra en el ranking final. El cliente sube el archivo (~50KB máx.) al
+  -- bucket y guarda aquí la URL pública.
+  logo_image text default '' check (char_length(logo_image) <= 500),
+  finish_image text default '' check (char_length(finish_image) <= 500),
   created_at timestamptz not null default now()
 );
 
@@ -332,3 +338,37 @@ alter publication supabase_realtime add table answers;
 -- recibiría. FULL incluye la fila completa para que el filtro de expulsión en
 -- el lobby del admin funcione.
 alter table participants replica identity full;
+
+-- ============================================================
+-- Storage (imágenes de sala)
+-- ============================================================
+-- Bucket público para el logo y la imagen final que el admin sube al crear la
+-- sala. Es público para que los participantes (anónimos) puedan verlas por su
+-- URL; la subida queda restringida a admins autenticados por la policy de
+-- abajo. El cliente limita el tamaño a ~50KB.
+insert into storage.buckets (id, name, public)
+values ('room-images', 'room-images', true)
+on conflict (id) do update set public = true;
+
+drop policy if exists "room_images_select_public" on storage.objects;
+drop policy if exists "room_images_insert_auth" on storage.objects;
+drop policy if exists "room_images_update_auth" on storage.objects;
+drop policy if exists "room_images_delete_auth" on storage.objects;
+
+-- Lectura pública (participantes ven el logo / imagen final sin cuenta).
+create policy "room_images_select_public" on storage.objects
+  for select using (bucket_id = 'room-images');
+
+-- Solo admins autenticados pueden subir/reemplazar/borrar imágenes de sala.
+create policy "room_images_insert_auth" on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'room-images');
+
+create policy "room_images_update_auth" on storage.objects
+  for update to authenticated
+  using (bucket_id = 'room-images')
+  with check (bucket_id = 'room-images');
+
+create policy "room_images_delete_auth" on storage.objects
+  for delete to authenticated
+  using (bucket_id = 'room-images');

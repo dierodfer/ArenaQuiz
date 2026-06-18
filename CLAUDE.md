@@ -36,7 +36,7 @@ Convención deliberada: la app vive en un solo archivo `src/App.jsx`. No la divi
 
 ## Modelo de datos (5 tablas)
 
-- `rooms`: `id` (texto, código de 6 chars generado en cliente), `admin_id` (uuid, FK a `auth.users`), `name` (obligatorio, máx. 25 chars, validado en cliente con `validateRoomName` y por `check` en BD), `status`, `current_question_index`, `time_per_question`, `finish_message` (texto opcional, máx. 100 chars — mensaje personalizado que aparece en el ranking al terminar la encuesta).
+- `rooms`: `id` (texto, código de 6 chars generado en cliente), `admin_id` (uuid, FK a `auth.users`), `name` (obligatorio, máx. 25 chars, validado en cliente con `validateRoomName` y por `check` en BD), `status`, `current_question_index`, `time_per_question`, `finish_message` (texto opcional, máx. 100 chars — mensaje personalizado que aparece en el ranking al terminar la encuesta), `logo_image` y `finish_image` (URLs públicas opcionales de imágenes en Supabase Storage; ver sección "Imágenes de sala").
 - `participants`: FK a room, `username` (3-10 chars, validado en cliente con `validateUsername`), `email` (opcional, máx. 50 chars, `validateEmail`), `score`. El admin dueño puede expulsar participantes en el lobby (botón "Editar" en `AdminRoom`, estado `open`); el DELETE se propaga por realtime (`replica identity full` para que el filtro por `room_id` reciba el evento).
 - `questions`: **banco de preguntas del admin, desacoplado de las salas**. `admin_id` (uuid, FK a `auth.users`), `category` (texto libre, default `'General'`), `title`, `options` (jsonb, array de 2 a 4 textos — el formulario manual siempre crea 4, la importación JSON admite 2-4), `correct_answer` (letra A-D según la posición en `options`). Una pregunta se crea una vez y se reutiliza en cualquier sala propia. La UI (`AnswerBreakdown`, `ParticipantRoom`) itera sobre `question.options`, no sobre `LETTERS` fijo, para soportar menos de 4 opciones.
 - `room_questions`: tabla de unión sala↔pregunta. FK a room y question, `question_number` (0-based, igual a `current_question_index`). Define qué preguntas y en qué orden juega cada sala. Unique por `(room_id, question_number)` y `(room_id, question_id)`.
@@ -76,6 +76,15 @@ waiting → open → closed → in_question ⇄ showing_results → finished
 - `showing_results` → `in_question`: botón "Siguiente" incrementa `current_question_index` y vuelve a `in_question` en el mismo UPDATE. Si no quedan preguntas → `finished`.
 - Cualquier estado de juego (`in_question`/`showing_results`) → `finished`: el admin puede saltar el resto de la encuesta e ir directo al ranking con el botón "Finalizar encuesta" (`skipSurvey`, con `window.confirm`; ambos caminos pasan por `finishSurvey`).
 - Al llegar a `finished`, el admin llama además a `cleanup_finished_room` (RPC) para borrar los datos efímeros de la sala (ver sección RLS). Tanto admin ("Volver al menú") como participante ("Volver al inicio") tienen un botón para salir de la sala tras el ranking; el del participante (`onHome`) vuelve a la pantalla de selección de rol.
+
+## Imágenes de sala (Supabase Storage)
+
+- Al crear la sala el admin puede subir, de forma **opcional**, dos imágenes (componente `ImageUploadField`, idealmente SVG, límite cliente de `IMAGE_MAX_BYTES` = 50KB):
+  - **Logo de sala** (`logo_image`): sustituye al branding de la app (`Target` + "ArenaQuiz") en el `Header` mientras estás dentro de la sala, en todas las pantallas, tanto admin como participante. Se propaga vía el contexto `RoomBrandingContext`: `AdminRoom`/`ParticipantRoom` publican `room.logo_image` con `setRoomLogo` al montar y lo limpian (`null`) al desmontar; el `Header` lo consume y muestra `<img>` en lugar del logo por defecto.
+  - **Imagen final** (`finish_image`): se muestra en la vista de ranking (`Ranking`, prop `finishImage`) al terminar la encuesta.
+- Las imágenes se suben al bucket **público** `room-images` de Supabase Storage (`uploadRoomImage`, ruta `${roomId}/${kind}.${ext}`, `upsert: true`) y en `rooms` se guarda solo la **URL pública** (no la imagen inline). El bucket y sus policies están en `schema.sql` (sección Storage): lectura pública (participantes anónimos), subida/borrado solo para `authenticated`.
+- Se renderizan siempre con `<img src>` (no `dangerouslySetInnerHTML`), por lo que un SVG no ejecuta scripts.
+- Si re-ejecutas `schema.sql` en un proyecto existente, además de las tablas crea/actualiza el bucket `room-images` y sus policies de `storage.objects`.
 
 ## Arquitectura de eventos y timing
 
