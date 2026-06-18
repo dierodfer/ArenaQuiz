@@ -4,7 +4,7 @@ import {
   Sun, Moon, Target, Loader2, LogIn, Mail, Lock, Unlock, Plus, Library, LogOut,
   ArrowLeft, Tag, Trash2, Clock, ListChecks, Users, User, Play, Copy, Check, X, Pencil,
   RefreshCw, Trophy, Medal, Crown, CheckCircle2, XCircle, MinusCircle, AlertCircle,
-  ChevronRight, Triangle, Diamond, Circle, Square, Eye, SkipForward, Upload, ChevronDown,
+  ChevronRight, Triangle, Diamond, Circle, Square, Eye, SkipForward, Upload, ChevronDown, Home,
 } from 'lucide-react'
 import { supabase } from './supabaseClient'
 // Listas públicas de palabras ofensivas (paquete `naughty-words`). Viven en
@@ -425,9 +425,13 @@ function TimerBar({ phase, timeLeft, total }) {
 
 // Desglose por opción: muestra el texto de cada respuesta posible y, justo
 // debajo, el porcentaje y el número de respuestas recibidas. Si showCorrect,
-// resalta la opción correcta.
-function AnswerBreakdown({ question, answers, showCorrect }) {
+// resalta la opción correcta. Si se pasa totalParticipants, añade al final una
+// fila "No respondido" con los participantes que no contestaron.
+function AnswerBreakdown({ question, answers, showCorrect, totalParticipants }) {
   const total = answers.length
+  const notAnswered =
+    typeof totalParticipants === 'number' ? Math.max(0, totalParticipants - total) : 0
+  const notAnsweredPct = totalParticipants ? Math.round((notAnswered / totalParticipants) * 100) : 0
   return (
     <div className="space-y-2.5">
       {question.options.map((opt, i) => {
@@ -464,6 +468,22 @@ function AnswerBreakdown({ question, answers, showCorrect }) {
           </div>
         )
       })}
+      {typeof totalParticipants === 'number' && (
+        <div className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900/60">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+              <MinusCircle className="h-4 w-4" aria-hidden="true" />
+            </span>
+            <span className="min-w-0 flex-1 font-medium text-zinc-500 dark:text-zinc-400">No respondido</span>
+            <span className="shrink-0 tabular-nums text-sm text-zinc-500 dark:text-zinc-400">
+              {notAnsweredPct}% · {notAnswered}
+            </span>
+          </div>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+            <div className="h-full rounded-full bg-zinc-400 dark:bg-zinc-600" style={{ width: `${notAnsweredPct}%` }} />
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1285,17 +1305,30 @@ function AdminRoom({ room, setRoom, onExit }) {
   // Timer del admin: cuando llega a 0 cierra la pregunta para todos
   const { phase, timeLeft } = useQuestionTimer(room, closeQuestion)
 
+  // Termina la encuesta y va directo al ranking. Limpia los datos efímeros de
+  // la sala (selección de preguntas y respuestas individuales); conserva
+  // rooms/participants para el ranking y questions, que vive en el banco del
+  // admin.
+  const finishSurvey = async () => {
+    await updateRoom({ status: 'finished' })
+    const { error } = await supabase.rpc('cleanup_finished_room', { p_room_id: room.id })
+    if (error) alert(error.message)
+  }
+
+  // El admin salta el resto de la encuesta y va directo al ranking, sin pasar
+  // por las preguntas restantes.
+  const skipSurvey = () => {
+    if (window.confirm('¿Terminar la encuesta y mostrar el ranking? Se omitirán las preguntas restantes.')) {
+      finishSurvey()
+    }
+  }
+
   const nextQuestion = async () => {
     const nextIndex = room.current_question_index + 1
     if (nextIndex < questions.length) {
       updateRoom({ current_question_index: nextIndex, status: 'in_question' })
     } else {
-      await updateRoom({ status: 'finished' })
-      // Limpia los datos efímeros de la sala (selección de preguntas y
-      // respuestas individuales); conserva rooms/participants para el ranking
-      // y questions, que vive en el banco del admin.
-      const { error } = await supabase.rpc('cleanup_finished_room', { p_room_id: room.id })
-      if (error) alert(error.message)
+      await finishSurvey()
     }
   }
 
@@ -1487,10 +1520,14 @@ function AdminRoom({ room, setRoom, onExit }) {
                   </div>
                   <p className="text-xs text-zinc-400">El desglose se mostrará al agotarse el tiempo.</p>
                 </div>
-                <div className="mx-auto max-w-sm">
+                <div className="mx-auto flex max-w-sm flex-col gap-2">
                   <button className="btn-secondary" onClick={closeQuestion}>
                     <SkipForward className="h-4 w-4" aria-hidden="true" />
                     Saltar pregunta
+                  </button>
+                  <button className="btn-ghost justify-center" onClick={skipSurvey}>
+                    <Trophy className="h-4 w-4" aria-hidden="true" />
+                    Finalizar encuesta
                   </button>
                 </div>
               </div>
@@ -1522,8 +1559,8 @@ function AdminRoom({ room, setRoom, onExit }) {
                     </div>
                   )}
                 </div>
-                <AnswerBreakdown question={question} answers={liveAnswers} showCorrect={true} />
-                <div className="mx-auto max-w-sm">
+                <AnswerBreakdown question={question} answers={liveAnswers} showCorrect={true} totalParticipants={participants.length} />
+                <div className="mx-auto flex max-w-sm flex-col gap-2">
                   <button className="btn" onClick={nextQuestion}>
                     {room.current_question_index + 1 < questions.length ? (
                       <>
@@ -1537,6 +1574,12 @@ function AdminRoom({ room, setRoom, onExit }) {
                       </>
                     )}
                   </button>
+                  {room.current_question_index + 1 < questions.length && (
+                    <button className="btn-ghost justify-center" onClick={skipSurvey}>
+                      <Trophy className="h-4 w-4" aria-hidden="true" />
+                      Finalizar encuesta
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -1561,7 +1604,7 @@ function AdminRoom({ room, setRoom, onExit }) {
 
 // ---------- PARTICIPANTE ----------
 
-function ParticipantApp() {
+function ParticipantApp({ onHome }) {
   const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [participant, setParticipant] = useState(null)
@@ -1614,7 +1657,7 @@ function ParticipantApp() {
   }
 
   if (participant && room) {
-    return <ParticipantRoom room={room} setRoom={setRoom} participant={participant} />
+    return <ParticipantRoom room={room} setRoom={setRoom} participant={participant} onHome={onHome} />
   }
 
   return (
@@ -1732,7 +1775,7 @@ function ParticipantApp() {
   )
 }
 
-function ParticipantRoom({ room, setRoom, participant }) {
+function ParticipantRoom({ room, setRoom, participant, onHome }) {
   const question = useCurrentQuestion(room)
   const stats = useQuestionStats(room, question)
   const [myAnswer, setMyAnswer] = useState(null)
@@ -1910,7 +1953,17 @@ function ParticipantRoom({ room, setRoom, participant }) {
             </div>
           )}
 
-          {room.status === 'finished' && <Ranking roomId={room.id} highlightId={participant.id} />}
+          {room.status === 'finished' && (
+            <div className="space-y-6">
+              <Ranking roomId={room.id} highlightId={participant.id} />
+              <div className="mx-auto max-w-sm">
+                <button className="btn-secondary" onClick={onHome}>
+                  <Home className="h-4 w-4" aria-hidden="true" />
+                  Volver al inicio
+                </button>
+              </div>
+            </div>
+          )}
         </motion.div>
       </Panel>
     </Stage>
@@ -1969,7 +2022,7 @@ export default function App() {
           ) : role === 'admin' ? (
             <AdminApp />
           ) : (
-            <ParticipantApp />
+            <ParticipantApp onHome={() => setRole(null)} />
           )}
         </main>
       </div>

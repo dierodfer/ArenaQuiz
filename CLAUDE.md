@@ -74,7 +74,8 @@ waiting → open → closed → in_question ⇄ showing_results → finished
 - `open`: los participantes pueden unirse (se valida en el join).
 - `in_question` → `showing_results`: lo dispara automáticamente el timer del ADMIN al llegar a 0, o manualmente el admin con el botón "Saltar pregunta" (`closeQuestion`, misma transición que `onTimeUp`).
 - `showing_results` → `in_question`: botón "Siguiente" incrementa `current_question_index` y vuelve a `in_question` en el mismo UPDATE. Si no quedan preguntas → `finished`.
-- Al llegar a `finished`, el admin llama además a `cleanup_finished_room` (RPC) para borrar los datos efímeros de la sala (ver sección RLS).
+- Cualquier estado de juego (`in_question`/`showing_results`) → `finished`: el admin puede saltar el resto de la encuesta e ir directo al ranking con el botón "Finalizar encuesta" (`skipSurvey`, con `window.confirm`; ambos caminos pasan por `finishSurvey`).
+- Al llegar a `finished`, el admin llama además a `cleanup_finished_room` (RPC) para borrar los datos efímeros de la sala (ver sección RLS). Tanto admin ("Volver al menú") como participante ("Volver al inicio") tienen un botón para salir de la sala tras el ranking; el del participante (`onHome`) vuelve a la pantalla de selección de rol.
 
 ## Arquitectura de eventos y timing
 
@@ -82,7 +83,7 @@ waiting → open → closed → in_question ⇄ showing_results → finished
 - El admin además escucha INSERTs en `participants` (lobby en vivo) e INSERTs en `answers` filtrados por la pregunta actual (respuestas en vivo). El canal de answers se recrea por pregunta.
 - El timer es 100% cliente (`useQuestionTimer`): al entrar en `in_question` hay 3s de fase "lea" (sin timer visible, opciones deshabilitadas) y después la cuenta atrás oficial de `time_per_question` segundos. Durante la fase `answering` se muestra, además del número, una barra de progreso (`TimerBar`) tanto en admin como en participante.
 - Solo el timer del admin tiene efectos: al llegar a 0 actualiza `status = 'showing_results'`. El timer del participante es puramente visual; cuando llega a 0 solo deshabilita las opciones y espera el evento.
-- En la vista de monitoreo del admin, `AnswerBreakdown` muestra cada respuesta posible (texto de la opción) y, justo debajo, el % y el número de respuestas; solo se renderiza en `showing_results` (durante `in_question` el admin solo ve el contador de respuestas recibidas, sin desglose, para no filtrar la tendencia mientras se puede seguir respondiendo). Los `liveAnswers` se siguen recolectando durante `in_question` y solo se limpian al cambiar de pregunta, para que el desglose esté listo en cuanto se agote el tiempo.
+- En la vista de monitoreo del admin, `AnswerBreakdown` muestra cada respuesta posible (texto de la opción) y, justo debajo, el % y el número de respuestas; solo se renderiza en `showing_results` (durante `in_question` el admin solo ve el contador de respuestas recibidas, sin desglose, para no filtrar la tendencia mientras se puede seguir respondiendo). Con la prop `totalParticipants` añade una fila final "No respondido" (participantes que no contestaron, con su % sobre el total). Los `liveAnswers` se siguen recolectando durante `in_question` y solo se limpian al cambiar de pregunta, para que el desglose esté listo en cuanto se agote el tiempo.
 - El texto de las preguntas y de las opciones de respuesta no se puede seleccionar ni copiar (`NoCopy`: `select-none` + bloqueo de `copy`/`contextmenu`), tanto en la vista de admin como en la de participante.
 - `is_correct` y el score (+100 por acierto) se calculan en el servidor (`submit_answer` RPC). El % de acierto se obtiene de `get_question_stats` al entrar en `showing_results`.
 
