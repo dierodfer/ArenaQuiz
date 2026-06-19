@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo, createContext, useContext } from 'react'
 import { motion, MotionConfig } from 'framer-motion'
 import {
   Sun, Moon, Target, Loader2, LogIn, Mail, Lock, Unlock, Plus, Library, LogOut,
   ArrowLeft, Tag, Trash2, Clock, ListChecks, Users, User, Play, Copy, Check, X, Pencil,
   RefreshCw, Trophy, Medal, Crown, CheckCircle2, XCircle, MinusCircle, AlertCircle,
   ChevronRight, Triangle, Diamond, Circle, Square, Eye, SkipForward, Upload, ChevronDown, Home,
+  MessageSquare, Image as ImageIcon,
 } from 'lucide-react'
 import { supabase } from './supabaseClient'
 // Listas públicas de palabras ofensivas (paquete `naughty-words`). Viven en
@@ -35,6 +36,30 @@ const USERNAME_MIN_LENGTH = 3
 const USERNAME_MAX_LENGTH = 10
 const EMAIL_MAX_LENGTH = 50
 const ROOM_NAME_MAX_LENGTH = 25
+const FINISH_MESSAGE_MAX_LENGTH = 100
+// Límite del archivo de imagen subido (logo de sala / imagen final). Se suben
+// al bucket público de Supabase Storage; conviene mantenerlas pequeñas
+// (idealmente SVG).
+const IMAGE_MAX_BYTES = 50 * 1024
+const ROOM_IMAGES_BUCKET = 'room-images'
+
+// Sube un archivo de imagen al bucket de Storage y devuelve su URL pública.
+// kind: 'logo' | 'finish'. Usa el id de sala como carpeta para no colisionar.
+async function uploadRoomImage(roomId, kind, file) {
+  const ext = (file.name.split('.').pop() || 'png').toLowerCase()
+  const path = `${roomId}/${kind}.${ext}`
+  const { error } = await supabase.storage
+    .from(ROOM_IMAGES_BUCKET)
+    .upload(path, file, { upsert: true, contentType: file.type })
+  if (error) throw error
+  const { data } = supabase.storage.from(ROOM_IMAGES_BUCKET).getPublicUrl(path)
+  return data.publicUrl
+}
+
+// El logo de la sala activa sustituye al branding de la app en el Header
+// mientras estás dentro de una sala. La sala (admin o participante) lo publica
+// vía este contexto; el Header lo consume.
+const RoomBrandingContext = createContext({ setRoomLogo: () => {} })
 
 // Marcas diacríticas combinantes (acentos) en Unicode, para poder quitarlas.
 const DIACRITICS = new RegExp('[\\u0300-\\u036f]', 'g')
@@ -245,6 +270,82 @@ function useQuestionStats(room, question) {
       })
   }, [room?.status, question?.id])
   return stats
+}
+
+// Participantes de la sala para el admin: carga inicial + realtime de altas
+// (INSERT, lobby en vivo) y bajas (DELETE, expulsión). Deliberadamente NO
+// escucha UPDATE: la única actualización de participants es el score (lo sube
+// submit_answer en cada acierto), y el admin no muestra puntuaciones en vivo
+// —el ranking final hace su propia consulta—. Escuchar UPDATE enviaría un
+// mensaje de Realtime al admin por cada respuesta correcta sin usarse, lo que
+// en la capa gratuita es consumo desperdiciado. Devuelve también el setter para
+// que la expulsión pueda actualizar el estado de forma optimista.
+function useLobbyParticipants(roomId) {
+  const [participants, setParticipants] = useState([])
+  useEffect(() => {
+    let active = true
+    supabase
+      .from('participants')
+      .select('id, username')
+      .eq('room_id', roomId)
+      .then(({ data }) => {
+        if (active) setParticipants(data ?? [])
+      })
+    const channel = supabase
+      .channel(`participants-${roomId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'participants', filter: `room_id=eq.${roomId}` },
+        (payload) => setParticipants((prev) => [...prev, payload.new]),
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'participants', filter: `room_id=eq.${roomId}` },
+        (payload) => setParticipants((prev) => prev.filter((p) => p.id !== payload.old.id)),
+      )
+      .subscribe()
+    return () => {
+      active = false
+      supabase.removeChannel(channel)
+    }
+  }, [roomId])
+  return [participants, setParticipants]
+}
+
+// Respuestas de la pregunta actual (solo el admin; RLS deja leer answers al
+// dueño de la pregunta). Carga inicial + realtime de INSERT. Solo se necesitan
+// `answer` (para el desglose por opción) e `is_correct` (para el % de acierto),
+// no la fila completa. Se vacían al cambiar de pregunta, pero se conservan al
+// pasar de in_question a showing_results para tener el desglose listo.
+function useLiveAnswers(question, status) {
+  const [answers, setAnswers] = useState([])
+  useEffect(() => {
+    setAnswers([])
+  }, [question?.id])
+  useEffect(() => {
+    if (!question || !['in_question', 'showing_results'].includes(status)) return
+    let active = true
+    supabase
+      .from('answers')
+      .select('answer, is_correct')
+      .eq('question_id', question.id)
+      .then(({ data }) => {
+        if (active) setAnswers(data ?? [])
+      })
+    const channel = supabase
+      .channel(`answers-${question.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'answers', filter: `question_id=eq.${question.id}` },
+        (payload) => setAnswers((prev) => [...prev, payload.new]),
+      )
+      .subscribe()
+    return () => {
+      active = false
+      supabase.removeChannel(channel)
+    }
+  }, [question?.id, status])
+  return answers
 }
 
 // Tema claro/oscuro persistido en localStorage. La clase inicial la pone un
@@ -548,7 +649,7 @@ function RankRow({ rank, p, highlight }) {
   )
 }
 
-function Ranking({ roomId, highlightId }) {
+function Ranking({ roomId, highlightId, finishMessage, finishImage }) {
   const [rows, setRows] = useState([])
   useEffect(() => {
     supabase
@@ -571,6 +672,16 @@ function Ranking({ roomId, highlightId }) {
           <Trophy className="h-6 w-6" aria-hidden="true" />
         </span>
         <h2 className="text-2xl font-bold tracking-tight">Ranking final</h2>
+        {finishMessage && (
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">{finishMessage}</p>
+        )}
+        {finishImage && (
+          <img
+            src={finishImage}
+            alt=""
+            className="mx-auto mt-4 max-h-40 max-w-full object-contain"
+          />
+        )}
       </div>
       {rows.length === 0 ? (
         <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">Sin participantes.</p>
@@ -1004,6 +1115,76 @@ function QuestionBank({ session, onBack }) {
   )
 }
 
+// Campo opcional de subida de imagen (logo de sala / imagen final). Es
+// controlado: el padre guarda el File y este componente muestra la previa
+// (object URL local) y valida tipo/tamaño antes de aceptarlo.
+function ImageUploadField({ id, label, hint, file, onSelect }) {
+  const [error, setError] = useState('')
+  const [preview, setPreview] = useState('')
+
+  useEffect(() => {
+    if (!file) {
+      setPreview('')
+      return
+    }
+    const url = URL.createObjectURL(file)
+    setPreview(url)
+    return () => URL.revokeObjectURL(url)
+  }, [file])
+
+  const handleFile = (f) => {
+    setError('')
+    if (!f) return
+    if (!f.type.startsWith('image/')) return setError('El archivo debe ser una imagen.')
+    if (f.size > IMAGE_MAX_BYTES) return setError(`La imagen supera el límite de ${Math.round(IMAGE_MAX_BYTES / 1024)} KB.`)
+    onSelect(f)
+  }
+
+  return (
+    <div>
+      <p className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+        <ImageIcon className="h-4 w-4 text-zinc-400" aria-hidden="true" />
+        {label} <span className="font-normal text-zinc-400">(opcional)</span>
+      </p>
+      {preview ? (
+        <div className="flex items-center gap-3">
+          <img
+            src={preview}
+            alt=""
+            className="h-16 w-16 rounded-lg border border-zinc-200 bg-white object-contain p-1 dark:border-zinc-800 dark:bg-zinc-900"
+          />
+          <button type="button" className="btn-ghost text-xs" onClick={() => onSelect(null)}>
+            <X className="h-4 w-4" aria-hidden="true" />
+            Quitar
+          </button>
+        </div>
+      ) : (
+        <label
+          htmlFor={id}
+          className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-300 px-4 py-3 text-sm text-zinc-500 transition-colors hover:border-indigo-400 hover:text-indigo-600 dark:border-zinc-700 dark:text-zinc-400 dark:hover:border-indigo-500"
+        >
+          <Upload className="h-4 w-4" aria-hidden="true" />
+          Subir imagen
+          <input
+            id={id}
+            type="file"
+            accept="image/svg+xml,image/png,image/jpeg,image/webp,image/gif"
+            className="hidden"
+            onChange={(e) => handleFile(e.target.files?.[0])}
+          />
+        </label>
+      )}
+      {hint && !error && <p className="mt-1 text-xs text-zinc-400">{hint}</p>}
+      {error && (
+        <p className="mt-1 flex items-center gap-1.5 text-xs text-rose-600 dark:text-rose-400">
+          <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
 // Crear sala: se elige el tiempo por pregunta, una categoría del banco y, dentro
 // de ella, las preguntas concretas (el orden de selección define el orden de
 // juego). Al crear la sala se insertan las filas de room_questions.
@@ -1013,10 +1194,14 @@ function CreateRoom({ session, setRoom, onBack }) {
   const [questions, setQuestions] = useState([])
   const [category, setCategory] = useState('')
   const [selectedIds, setSelectedIds] = useState([]) // en orden de selección
+  const [finishMessage, setFinishMessage] = useState('')
+  const [logoFile, setLogoFile] = useState(null)
+  const [finishFile, setFinishFile] = useState(null)
+  const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
   const nameError = validateRoomName(name)
-  const canCreate = !nameError && selectedIds.length > 0
+  const canCreate = !nameError && selectedIds.length > 0 && !submitting
 
   useEffect(() => {
     supabase
@@ -1038,10 +1223,31 @@ function CreateRoom({ session, setRoom, onBack }) {
   const toggle = (id) =>
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
 
+  const allSelected = inCategory.length > 0 && inCategory.every((q) => selectedIds.includes(q.id))
+  const toggleAll = () => {
+    if (allSelected) {
+      setSelectedIds([])
+    } else {
+      setSelectedIds(inCategory.map((q) => q.id))
+    }
+  }
+
   const createRoom = async () => {
     setError('')
     if (!canCreate) return
+    setSubmitting(true)
     const id = generateRoomCode()
+    // Las imágenes (opcionales) se suben al bucket antes de insertar la sala;
+    // guardamos sus URLs públicas en la fila de rooms.
+    let logoUrl = ''
+    let finishUrl = ''
+    try {
+      if (logoFile) logoUrl = await uploadRoomImage(id, 'logo', logoFile)
+      if (finishFile) finishUrl = await uploadRoomImage(id, 'finish', finishFile)
+    } catch (e) {
+      setSubmitting(false)
+      return setError(`No se pudieron subir las imágenes: ${e.message}`)
+    }
     const { data: r, error: rErr } = await supabase
       .from('rooms')
       .insert({
@@ -1051,17 +1257,26 @@ function CreateRoom({ session, setRoom, onBack }) {
         status: 'waiting',
         current_question_index: 0,
         time_per_question: timePerQuestion,
+        finish_message: finishMessage.trim(),
+        logo_image: logoUrl,
+        finish_image: finishUrl,
       })
       .select()
       .single()
-    if (rErr) return setError(rErr.message)
+    if (rErr) {
+      setSubmitting(false)
+      return setError(rErr.message)
+    }
     const rows = selectedIds.map((qid, i) => ({
       room_id: id,
       question_id: qid,
       question_number: i,
     }))
     const { error: rqErr } = await supabase.from('room_questions').insert(rows)
-    if (rqErr) return setError(rqErr.message)
+    if (rqErr) {
+      setSubmitting(false)
+      return setError(rqErr.message)
+    }
     setRoom(r)
   }
 
@@ -1095,6 +1310,14 @@ function CreateRoom({ session, setRoom, onBack }) {
               </p>
             </div>
 
+            <ImageUploadField
+              id="logo-image"
+              label="Logo de la sala"
+              hint="Sustituye al logo de la app dentro de la sala. Ideal SVG, máx. 50 KB."
+              file={logoFile}
+              onSelect={setLogoFile}
+            />
+
             <div>
               <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">
                 <Clock className="h-4 w-4 text-zinc-400" aria-hidden="true" />
@@ -1112,6 +1335,35 @@ function CreateRoom({ session, setRoom, onBack }) {
                     {s}
                   </button>
                 ))}
+              </div>
+            </div>
+
+            <div>
+              <label htmlFor="finish-message" className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                <span className="flex items-center gap-1.5">
+                  <MessageSquare className="h-4 w-4 text-zinc-400" aria-hidden="true" />
+                  Mensaje final <span className="font-normal text-zinc-400">(opcional)</span>
+                </span>
+              </label>
+              <input
+                id="finish-message"
+                className="input"
+                placeholder="p.ej. ¡Gracias por participar!"
+                maxLength={FINISH_MESSAGE_MAX_LENGTH}
+                value={finishMessage}
+                onChange={(e) => setFinishMessage(e.target.value)}
+              />
+              <p className="mt-1 text-right text-xs text-zinc-400">
+                {finishMessage.trim().length}/{FINISH_MESSAGE_MAX_LENGTH}
+              </p>
+              <div className="mt-3">
+                <ImageUploadField
+                  id="finish-image"
+                  label="Imagen final"
+                  hint="Se muestra en el ranking al terminar. Ideal SVG, máx. 50 KB."
+                  file={finishFile}
+                  onSelect={setFinishFile}
+                />
               </div>
             </div>
 
@@ -1143,11 +1395,18 @@ function CreateRoom({ session, setRoom, onBack }) {
 
             {category && (
               <div>
-                <p className="mb-2 flex items-center gap-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                  <ListChecks className="h-4 w-4 text-zinc-400" aria-hidden="true" />
-                  Preguntas
-                  <span className="font-normal text-zinc-400">· {selectedIds.length} seleccionadas (el orden es el de juego)</span>
-                </p>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="flex items-center gap-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                    <ListChecks className="h-4 w-4 text-zinc-400" aria-hidden="true" />
+                    Preguntas
+                    <span className="font-normal text-zinc-400">· {selectedIds.length} seleccionadas (el orden es el de juego)</span>
+                  </p>
+                  {inCategory.length > 1 && (
+                    <button type="button" className="btn-ghost text-xs" onClick={toggleAll}>
+                      {allSelected ? 'Deseleccionar todas' : 'Seleccionar todas'}
+                    </button>
+                  )}
+                </div>
                 <div className="space-y-2">
                   {inCategory.map((q) => {
                     const order = selectedIds.indexOf(q.id)
@@ -1183,8 +1442,17 @@ function CreateRoom({ session, setRoom, onBack }) {
               </p>
             )}
             <button className="btn" type="submit" disabled={!canCreate}>
-              <Plus className="h-4 w-4" aria-hidden="true" />
-              Crear sala
+              {submitting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  Creando…
+                </>
+              ) : (
+                <>
+                  <Plus className="h-4 w-4" aria-hidden="true" />
+                  Crear sala
+                </>
+              )}
             </button>
           </form>
         </Panel>
@@ -1194,14 +1462,31 @@ function CreateRoom({ session, setRoom, onBack }) {
 }
 
 function AdminRoom({ room, setRoom, onExit }) {
-  const [participants, setParticipants] = useState([])
   const [questions, setQuestions] = useState([])
-  const [liveAnswers, setLiveAnswers] = useState([])
   const [editingParticipants, setEditingParticipants] = useState(false)
   const question = useCurrentQuestion(room)
-  const stats = useQuestionStats(room, question)
+  const { setRoomLogo } = useContext(RoomBrandingContext)
+  const [participants, setParticipants] = useLobbyParticipants(room.id)
+  const liveAnswers = useLiveAnswers(question, room.status)
+
+  // El admin ya tiene todas las respuestas (con is_correct) vía useLiveAnswers,
+  // así que las stats se calculan en cliente en vez de llamar a
+  // get_question_stats (un RPC menos por pregunta). El participante sí usa el
+  // RPC porque RLS no le deja leer answers.
+  const stats = useMemo(() => {
+    const total = liveAnswers.length
+    const correct = liveAnswers.filter((a) => a.is_correct).length
+    return { total, correct, pct: total ? Math.round((correct / total) * 100) : 0 }
+  }, [liveAnswers])
 
   useRoomSubscription(room.id, setRoom)
+
+  // El logo de la sala sustituye al branding de la app en el Header mientras
+  // estamos dentro; se restablece al salir.
+  useEffect(() => {
+    setRoomLogo(room.logo_image || null)
+    return () => setRoomLogo(null)
+  }, [room.logo_image, setRoomLogo])
 
   // Preguntas de la sala (banco filtrado vía room_questions, en orden de juego).
   useEffect(() => {
@@ -1216,67 +1501,6 @@ function AdminRoom({ room, setRoom, onExit }) {
         ),
       )
   }, [room.id])
-
-  // Participantes en vivo (INSERT mientras la sala está abierta, UPDATE para scores)
-  useEffect(() => {
-    supabase
-      .from('participants')
-      .select('*')
-      .eq('room_id', room.id)
-      .then(({ data }) => setParticipants(data ?? []))
-    const channel = supabase
-      .channel(`participants-${room.id}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'participants', filter: `room_id=eq.${room.id}` },
-        (payload) => setParticipants((prev) => [...prev, payload.new]),
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'participants', filter: `room_id=eq.${room.id}` },
-        (payload) =>
-          setParticipants((prev) => prev.map((p) => (p.id === payload.new.id ? payload.new : p))),
-      )
-      .on(
-        'postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'participants', filter: `room_id=eq.${room.id}` },
-        (payload) => setParticipants((prev) => prev.filter((p) => p.id !== payload.old.id)),
-      )
-      .subscribe()
-    return () => supabase.removeChannel(channel)
-  }, [room.id])
-
-  // Limpia las respuestas en vivo solo al cambiar de pregunta (no al pasar de
-  // in_question a showing_results, donde queremos conservar el desglose).
-  useEffect(() => {
-    setLiveAnswers([])
-  }, [question?.id])
-
-  // Respuestas en vivo de la pregunta actual (solo el admin lo necesita). Se
-  // refresca tanto en in_question como en showing_results para el desglose.
-  useEffect(() => {
-    if (!question || !['in_question', 'showing_results'].includes(room.status)) return
-    let active = true
-    supabase
-      .from('answers')
-      .select('*')
-      .eq('question_id', question.id)
-      .then(({ data }) => {
-        if (active) setLiveAnswers(data ?? [])
-      })
-    const channel = supabase
-      .channel(`answers-${question.id}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'answers', filter: `question_id=eq.${question.id}` },
-        (payload) => setLiveAnswers((prev) => [...prev, payload.new]),
-      )
-      .subscribe()
-    return () => {
-      active = false
-      supabase.removeChannel(channel)
-    }
-  }, [question?.id, room.status])
 
   const updateRoom = async (fields) => {
     const { data, error } = await supabase
@@ -1586,7 +1810,7 @@ function AdminRoom({ room, setRoom, onExit }) {
 
             {room.status === 'finished' && (
               <div className="space-y-6">
-                <Ranking roomId={room.id} />
+                <Ranking roomId={room.id} finishMessage={room.finish_message} finishImage={room.finish_image} />
                 <div className="mx-auto max-w-sm">
                   <button className="btn-secondary" onClick={onExit}>
                     <ArrowLeft className="h-4 w-4" aria-hidden="true" />
@@ -1616,9 +1840,12 @@ function ParticipantApp({ onHome }) {
 
   const loadOpenRooms = async () => {
     setReloading(true)
+    // La lista solo muestra nombre, código y antigüedad; la fila completa
+    // (incluidas las URLs de imágenes) se carga al unirse (join), así que aquí
+    // pedimos solo lo necesario para no transferir columnas de más.
     const { data } = await supabase
       .from('rooms')
-      .select('*')
+      .select('id, name, created_at')
       .eq('status', 'open')
       .order('created_at', { ascending: false })
     setOpenRooms(data ?? [])
@@ -1780,8 +2007,16 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
   const stats = useQuestionStats(room, question)
   const [myAnswer, setMyAnswer] = useState(null)
   const [score, setScore] = useState(participant.score)
+  const { setRoomLogo } = useContext(RoomBrandingContext)
 
   useRoomSubscription(room.id, setRoom)
+
+  // El logo de la sala sustituye al branding de la app en el Header mientras
+  // estamos dentro; se restablece al salir.
+  useEffect(() => {
+    setRoomLogo(room.logo_image || null)
+    return () => setRoomLogo(null)
+  }, [room.logo_image, setRoomLogo])
 
   // Nueva pregunta → limpiar respuesta anterior
   useEffect(() => {
@@ -1955,7 +2190,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
 
           {room.status === 'finished' && (
             <div className="space-y-6">
-              <Ranking roomId={room.id} highlightId={participant.id} />
+              <Ranking roomId={room.id} highlightId={participant.id} finishMessage={room.finish_message} finishImage={room.finish_image} />
               <div className="mx-auto max-w-sm">
                 <button className="btn-secondary" onClick={onHome}>
                   <Home className="h-4 w-4" aria-hidden="true" />
@@ -1972,16 +2207,21 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
 
 // ---------- SHELL ----------
 
-function Header({ theme, setTheme }) {
+function Header({ theme, setTheme, roomLogo }) {
   return (
     <header className="sticky top-0 z-20 border-b border-zinc-200/70 bg-zinc-50/80 backdrop-blur dark:border-zinc-800/70 dark:bg-zinc-950/80">
       <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
-        <div className="flex items-center gap-2">
-          <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white">
-            <Target className="h-5 w-5" aria-hidden="true" />
-          </span>
-          <span className="font-semibold tracking-tight">ArenaQuiz</span>
-        </div>
+        {roomLogo ? (
+          // Dentro de una sala con logo propio, este sustituye al branding de la app.
+          <img src={roomLogo} alt="Logo de la sala" className="h-9 max-w-[180px] object-contain" />
+        ) : (
+          <div className="flex items-center gap-2">
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white">
+              <Target className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <span className="font-semibold tracking-tight">ArenaQuiz</span>
+          </div>
+        )}
         <ThemeToggle theme={theme} setTheme={setTheme} />
       </div>
     </header>
@@ -2011,21 +2251,26 @@ function RoleSelect({ onPick }) {
 export default function App() {
   const [theme, setTheme] = useTheme()
   const [role, setRole] = useState(null)
+  // Logo de la sala activa: lo publica AdminRoom/ParticipantRoom vía el contexto
+  // y el Header lo usa para sustituir el branding de la app dentro de la sala.
+  const [roomLogo, setRoomLogo] = useState(null)
 
   return (
     <MotionConfig reducedMotion="user">
-      <div className="min-h-screen bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
-        <Header theme={theme} setTheme={setTheme} />
-        <main className="px-4 py-8 sm:py-12">
-          {!role ? (
-            <RoleSelect onPick={setRole} />
-          ) : role === 'admin' ? (
-            <AdminApp />
-          ) : (
-            <ParticipantApp onHome={() => setRole(null)} />
-          )}
-        </main>
-      </div>
+      <RoomBrandingContext.Provider value={{ setRoomLogo }}>
+        <div className="min-h-screen bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
+          <Header theme={theme} setTheme={setTheme} roomLogo={roomLogo} />
+          <main className="px-4 py-8 sm:py-12">
+            {!role ? (
+              <RoleSelect onPick={setRole} />
+            ) : role === 'admin' ? (
+              <AdminApp />
+            ) : (
+              <ParticipantApp onHome={() => setRole(null)} />
+            )}
+          </main>
+        </div>
+      </RoomBrandingContext.Provider>
     </MotionConfig>
   )
 }

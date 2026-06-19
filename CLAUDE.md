@@ -36,7 +36,7 @@ Convención deliberada: la app vive en un solo archivo `src/App.jsx`. No la divi
 
 ## Modelo de datos (5 tablas)
 
-- `rooms`: `id` (texto, código de 6 chars generado en cliente), `admin_id` (uuid, FK a `auth.users`), `name` (obligatorio, máx. 25 chars, validado en cliente con `validateRoomName` y por `check` en BD), `status`, `current_question_index`, `time_per_question`.
+- `rooms`: `id` (texto, código de 6 chars generado en cliente), `admin_id` (uuid, FK a `auth.users`), `name` (obligatorio, máx. 25 chars, validado en cliente con `validateRoomName` y por `check` en BD), `status`, `current_question_index`, `time_per_question`, `finish_message` (texto opcional, máx. 100 chars — mensaje personalizado que aparece en el ranking al terminar la encuesta), `logo_image` y `finish_image` (URLs públicas opcionales de imágenes en Supabase Storage; ver sección "Imágenes de sala").
 - `participants`: FK a room, `username` (3-10 chars, validado en cliente con `validateUsername`), `email` (opcional, máx. 50 chars, `validateEmail`), `score`. El admin dueño puede expulsar participantes en el lobby (botón "Editar" en `AdminRoom`, estado `open`); el DELETE se propaga por realtime (`replica identity full` para que el filtro por `room_id` reciba el evento).
 - `questions`: **banco de preguntas del admin, desacoplado de las salas**. `admin_id` (uuid, FK a `auth.users`), `category` (texto libre, default `'General'`), `title`, `options` (jsonb, array de 2 a 4 textos — el formulario manual siempre crea 4, la importación JSON admite 2-4), `correct_answer` (letra A-D según la posición en `options`). Una pregunta se crea una vez y se reutiliza en cualquier sala propia. La UI (`AnswerBreakdown`, `ParticipantRoom`) itera sobre `question.options`, no sobre `LETTERS` fijo, para soportar menos de 4 opciones.
 - `room_questions`: tabla de unión sala↔pregunta. FK a room y question, `question_number` (0-based, igual a `current_question_index`). Define qué preguntas y en qué orden juega cada sala. Unique por `(room_id, question_number)` y `(room_id, question_id)`.
@@ -69,7 +69,7 @@ Las tablas `rooms`, `participants` y `answers` están en la publicación `supaba
 waiting → open → closed → in_question ⇄ showing_results → finished
 ```
 
-- Las preguntas NO se crean dentro de la sala: el admin las gestiona antes en el **banco** (`QuestionBank`) y al **crear la sala** (`CreateRoom`) elige una categoría y, dentro de ella, las preguntas concretas (el orden de selección es el orden de juego). Esto inserta las filas de `room_questions`.
+- Las preguntas NO se crean dentro de la sala: el admin las gestiona antes en el **banco** (`QuestionBank`) y al **crear la sala** (`CreateRoom`) elige una categoría y, dentro de ella, las preguntas concretas (el orden de selección es el orden de juego; hay un botón "Seleccionar todas" / "Deseleccionar todas" cuando la categoría tiene más de 1 pregunta). Esto inserta las filas de `room_questions`.
 - `waiting`: la sala ya tiene sus preguntas elegidas; el admin las ve en modo lectura y puede abrirla.
 - `open`: los participantes pueden unirse (se valida en el join).
 - `in_question` → `showing_results`: lo dispara automáticamente el timer del ADMIN al llegar a 0, o manualmente el admin con el botón "Saltar pregunta" (`closeQuestion`, misma transición que `onTimeUp`).
@@ -77,15 +77,24 @@ waiting → open → closed → in_question ⇄ showing_results → finished
 - Cualquier estado de juego (`in_question`/`showing_results`) → `finished`: el admin puede saltar el resto de la encuesta e ir directo al ranking con el botón "Finalizar encuesta" (`skipSurvey`, con `window.confirm`; ambos caminos pasan por `finishSurvey`).
 - Al llegar a `finished`, el admin llama además a `cleanup_finished_room` (RPC) para borrar los datos efímeros de la sala (ver sección RLS). Tanto admin ("Volver al menú") como participante ("Volver al inicio") tienen un botón para salir de la sala tras el ranking; el del participante (`onHome`) vuelve a la pantalla de selección de rol.
 
+## Imágenes de sala (Supabase Storage)
+
+- Al crear la sala el admin puede subir, de forma **opcional**, dos imágenes (componente `ImageUploadField`, idealmente SVG, límite cliente de `IMAGE_MAX_BYTES` = 50KB):
+  - **Logo de sala** (`logo_image`): sustituye al branding de la app (`Target` + "ArenaQuiz") en el `Header` mientras estás dentro de la sala, en todas las pantallas, tanto admin como participante. Se propaga vía el contexto `RoomBrandingContext`: `AdminRoom`/`ParticipantRoom` publican `room.logo_image` con `setRoomLogo` al montar y lo limpian (`null`) al desmontar; el `Header` lo consume y muestra `<img>` en lugar del logo por defecto.
+  - **Imagen final** (`finish_image`): se muestra en la vista de ranking (`Ranking`, prop `finishImage`) al terminar la encuesta.
+- Las imágenes se suben al bucket **público** `room-images` de Supabase Storage (`uploadRoomImage`, ruta `${roomId}/${kind}.${ext}`, `upsert: true`) y en `rooms` se guarda solo la **URL pública** (no la imagen inline). El bucket y sus policies están en `schema.sql` (sección Storage): lectura pública (participantes anónimos), subida/borrado solo para `authenticated`.
+- Se renderizan siempre con `<img src>` (no `dangerouslySetInnerHTML`), por lo que un SVG no ejecuta scripts.
+- Si re-ejecutas `schema.sql` en un proyecto existente, además de las tablas crea/actualiza el bucket `room-images` y sus policies de `storage.objects`.
+
 ## Arquitectura de eventos y timing
 
 - Todos los clientes (admin y participantes) se suscriben a UPDATEs de su fila de `rooms` (`useRoomSubscription`). Cualquier cambio de `status` o `current_question_index` propaga la transición instantáneamente.
-- El admin además escucha INSERTs en `participants` (lobby en vivo) e INSERTs en `answers` filtrados por la pregunta actual (respuestas en vivo). El canal de answers se recrea por pregunta.
+- El admin además escucha, vía hooks dedicados, eventos de `participants` (`useLobbyParticipants`: INSERT para el lobby en vivo y DELETE para la expulsión) e INSERTs en `answers` filtrados por la pregunta actual (`useLiveAnswers`; el canal se recrea por pregunta). **Optimización de consumo (capa gratuita):** `useLobbyParticipants` NO escucha UPDATE de `participants` —la única actualización es el score, que sube `submit_answer` en cada acierto y el admin no muestra en vivo— para no recibir un mensaje de Realtime por cada respuesta correcta. Los `select` piden solo las columnas usadas (`id, username` en participantes; `answer, is_correct` en respuestas; `id, name, created_at` en la lista de salas abiertas), no `*`.
 - El timer es 100% cliente (`useQuestionTimer`): al entrar en `in_question` hay 3s de fase "lea" (sin timer visible, opciones deshabilitadas) y después la cuenta atrás oficial de `time_per_question` segundos. Durante la fase `answering` se muestra, además del número, una barra de progreso (`TimerBar`) tanto en admin como en participante.
 - Solo el timer del admin tiene efectos: al llegar a 0 actualiza `status = 'showing_results'`. El timer del participante es puramente visual; cuando llega a 0 solo deshabilita las opciones y espera el evento.
 - En la vista de monitoreo del admin, `AnswerBreakdown` muestra cada respuesta posible (texto de la opción) y, justo debajo, el % y el número de respuestas; solo se renderiza en `showing_results` (durante `in_question` el admin solo ve el contador de respuestas recibidas, sin desglose, para no filtrar la tendencia mientras se puede seguir respondiendo). Con la prop `totalParticipants` añade una fila final "No respondido" (participantes que no contestaron, con su % sobre el total). Los `liveAnswers` se siguen recolectando durante `in_question` y solo se limpian al cambiar de pregunta, para que el desglose esté listo en cuanto se agote el tiempo.
 - El texto de las preguntas y de las opciones de respuesta no se puede seleccionar ni copiar (`NoCopy`: `select-none` + bloqueo de `copy`/`contextmenu`), tanto en la vista de admin como en la de participante.
-- `is_correct` y el score (+100 por acierto) se calculan en el servidor (`submit_answer` RPC). El % de acierto se obtiene de `get_question_stats` al entrar en `showing_results`.
+- `is_correct` y el score (+100 por acierto) se calculan en el servidor (`submit_answer` RPC). El % de acierto en la vista del **participante** se obtiene de `get_question_stats` (RPC) al entrar en `showing_results`, porque RLS no le deja leer `answers`. El **admin**, en cambio, NO llama a ese RPC: deriva `{ total, correct, pct }` con `useMemo` a partir de los `liveAnswers` que ya tiene (incluyen `is_correct`), ahorrando un RPC por pregunta.
 
 ## Convenciones
 
