@@ -374,8 +374,9 @@ const enterTransition = { duration: 0.25, ease: [0.22, 1, 0.36, 1] }
 const listStagger = { hidden: {}, show: { transition: { staggerChildren: 0.04 } } }
 const listItem = { hidden: { opacity: 0, y: 8 }, show: { opacity: 1, y: 0 } }
 
-function Stage({ wide, children }) {
-  return <div className={`mx-auto w-full ${wide ? 'max-w-3xl' : 'max-w-md'}`}>{children}</div>
+function Stage({ wide, medium, children }) {
+  const w = wide ? 'max-w-3xl' : medium ? 'max-w-lg' : 'max-w-md'
+  return <div className={`mx-auto w-full ${w}`}>{children}</div>
 }
 
 function Panel({ children, className = '' }) {
@@ -2045,8 +2046,8 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
   const disabled = phase !== 'answering' || timeLeft <= 0 || !!myAnswer
 
   return (
-    <Stage>
-      <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-2.5 dark:border-zinc-800 dark:bg-zinc-900">
+    <Stage medium>
+      <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-2 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="flex min-w-0 items-center gap-2">
           <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-400">
             <User className="h-4 w-4" aria-hidden="true" />
@@ -2059,7 +2060,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
         </span>
       </div>
 
-      <Panel className="p-6 sm:p-8">
+      <Panel className="p-4 sm:p-6 md:p-8">
         <motion.div
           key={`${room.status}-${room.current_question_index}`}
           initial={enter.initial}
@@ -2075,7 +2076,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
           )}
 
           {room.status === 'in_question' && question && (
-            <div className="space-y-4">
+            <div className="space-y-3 sm:space-y-4">
               <h3 className="text-center text-lg font-bold leading-snug sm:text-xl">
                 <NoCopy>{question.title}</NoCopy>
               </h3>
@@ -2086,8 +2087,8 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
                 </p>
               )}
               {phase === 'answering' && (
-                <div className="space-y-2">
-                  <p className={`text-center font-mono text-4xl font-bold tabular-nums ${timeLeft <= 5 ? 'text-rose-500' : ''}`}>
+                <div className="space-y-1.5">
+                  <p className={`text-center font-mono text-3xl font-bold tabular-nums sm:text-4xl ${timeLeft <= 5 ? 'text-rose-500' : ''}`}>
                     {timeLeft}
                   </p>
                   <TimerBar phase={phase} timeLeft={timeLeft} total={room.time_per_question} />
@@ -2097,7 +2098,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
                 variants={listStagger}
                 initial="hidden"
                 animate="show"
-                className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+                className="grid grid-cols-1 gap-2.5 sm:gap-3 md:grid-cols-2"
               >
                 {question.options.map((opt, i) => {
                   const l = LETTERS[i]
@@ -2111,14 +2112,14 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
                       disabled={disabled}
                       onClick={() => answer(l)}
                       aria-label={`Opción ${l}: ${opt}`}
-                      className={`relative flex min-h-[4.5rem] items-center gap-3 rounded-2xl px-4 py-3 text-left text-white shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-50 ${solid} ${disabled ? '' : hover} ${
+                      className={`relative flex min-h-[4rem] items-center gap-2.5 rounded-2xl px-3.5 py-2.5 text-left text-white shadow-sm transition sm:min-h-[4.5rem] sm:gap-3 sm:px-4 sm:py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-50 ${solid} ${disabled ? '' : hover} ${
                         selected ? 'ring-4 ring-white ring-offset-2 ring-offset-zinc-50 dark:ring-offset-zinc-950' : ''
                       }`}
                     >
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/20">
-                        <Icon className="h-4 w-4" aria-hidden="true" />
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white/20 sm:h-8 sm:w-8">
+                        <Icon className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
                       </span>
-                      <span className="min-w-0 text-sm font-semibold leading-snug sm:text-base">
+                      <span className="min-w-0 text-[0.8125rem] font-semibold leading-snug sm:text-sm md:text-base">
                         <span className="mr-1 opacity-80">{l}.</span>
                         <NoCopy>{opt}</NoCopy>
                       </span>
@@ -2137,32 +2138,32 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
           )}
 
           {room.status === 'showing_results' && question && (
-            <div className="space-y-5 text-center">
-              <h3 className="text-lg font-bold leading-snug sm:text-2xl">
+            <div className="space-y-4 text-center sm:space-y-5">
+              <h3 className="text-lg font-bold leading-snug sm:text-xl">
                 <NoCopy>{question.title}</NoCopy>
               </h3>
               <motion.div
                 initial={{ scale: 0.85, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 transition={{ type: 'spring', stiffness: 300, damping: 18 }}
-                className="flex flex-col items-center gap-2"
+                className="flex flex-col items-center gap-1.5"
               >
                 {myAnswer ? (
                   myAnswer.is_correct ? (
                     <>
-                      <CheckCircle2 className="h-16 w-16 text-emerald-500" aria-hidden="true" />
-                      <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">¡Correcto!</p>
+                      <CheckCircle2 className="h-12 w-12 text-emerald-500 sm:h-16 sm:w-16" aria-hidden="true" />
+                      <p className="text-xl font-bold text-emerald-600 sm:text-2xl dark:text-emerald-400">¡Correcto!</p>
                     </>
                   ) : (
                     <>
-                      <XCircle className="h-16 w-16 text-rose-500" aria-hidden="true" />
-                      <p className="text-2xl font-bold text-rose-600 dark:text-rose-400">Incorrecto</p>
+                      <XCircle className="h-12 w-12 text-rose-500 sm:h-16 sm:w-16" aria-hidden="true" />
+                      <p className="text-xl font-bold text-rose-600 sm:text-2xl dark:text-rose-400">Incorrecto</p>
                     </>
                   )
                 ) : (
                   <>
-                    <MinusCircle className="h-16 w-16 text-zinc-400" aria-hidden="true" />
-                    <p className="text-xl font-semibold text-zinc-500 dark:text-zinc-400">No respondiste</p>
+                    <MinusCircle className="h-12 w-12 text-zinc-400 sm:h-16 sm:w-16" aria-hidden="true" />
+                    <p className="text-lg font-semibold text-zinc-500 sm:text-xl dark:text-zinc-400">No respondiste</p>
                   </>
                 )}
               </motion.div>
