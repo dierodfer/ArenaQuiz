@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, createContext, useContext } from 'react'
+import { useState, useEffect, useRef, useMemo, createContext, useContext } from 'react'
 import { motion, MotionConfig } from 'framer-motion'
 import {
   Sun, Moon, Target, Loader2, LogIn, Mail, Lock, Unlock, Plus, Library, LogOut,
@@ -270,6 +270,82 @@ function useQuestionStats(room, question) {
       })
   }, [room?.status, question?.id])
   return stats
+}
+
+// Participantes de la sala para el admin: carga inicial + realtime de altas
+// (INSERT, lobby en vivo) y bajas (DELETE, expulsión). Deliberadamente NO
+// escucha UPDATE: la única actualización de participants es el score (lo sube
+// submit_answer en cada acierto), y el admin no muestra puntuaciones en vivo
+// —el ranking final hace su propia consulta—. Escuchar UPDATE enviaría un
+// mensaje de Realtime al admin por cada respuesta correcta sin usarse, lo que
+// en la capa gratuita es consumo desperdiciado. Devuelve también el setter para
+// que la expulsión pueda actualizar el estado de forma optimista.
+function useLobbyParticipants(roomId) {
+  const [participants, setParticipants] = useState([])
+  useEffect(() => {
+    let active = true
+    supabase
+      .from('participants')
+      .select('id, username')
+      .eq('room_id', roomId)
+      .then(({ data }) => {
+        if (active) setParticipants(data ?? [])
+      })
+    const channel = supabase
+      .channel(`participants-${roomId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'participants', filter: `room_id=eq.${roomId}` },
+        (payload) => setParticipants((prev) => [...prev, payload.new]),
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'participants', filter: `room_id=eq.${roomId}` },
+        (payload) => setParticipants((prev) => prev.filter((p) => p.id !== payload.old.id)),
+      )
+      .subscribe()
+    return () => {
+      active = false
+      supabase.removeChannel(channel)
+    }
+  }, [roomId])
+  return [participants, setParticipants]
+}
+
+// Respuestas de la pregunta actual (solo el admin; RLS deja leer answers al
+// dueño de la pregunta). Carga inicial + realtime de INSERT. Solo se necesitan
+// `answer` (para el desglose por opción) e `is_correct` (para el % de acierto),
+// no la fila completa. Se vacían al cambiar de pregunta, pero se conservan al
+// pasar de in_question a showing_results para tener el desglose listo.
+function useLiveAnswers(question, status) {
+  const [answers, setAnswers] = useState([])
+  useEffect(() => {
+    setAnswers([])
+  }, [question?.id])
+  useEffect(() => {
+    if (!question || !['in_question', 'showing_results'].includes(status)) return
+    let active = true
+    supabase
+      .from('answers')
+      .select('answer, is_correct')
+      .eq('question_id', question.id)
+      .then(({ data }) => {
+        if (active) setAnswers(data ?? [])
+      })
+    const channel = supabase
+      .channel(`answers-${question.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'answers', filter: `question_id=eq.${question.id}` },
+        (payload) => setAnswers((prev) => [...prev, payload.new]),
+      )
+      .subscribe()
+    return () => {
+      active = false
+      supabase.removeChannel(channel)
+    }
+  }, [question?.id, status])
+  return answers
 }
 
 // Tema claro/oscuro persistido en localStorage. La clase inicial la pone un
@@ -1386,13 +1462,22 @@ function CreateRoom({ session, setRoom, onBack }) {
 }
 
 function AdminRoom({ room, setRoom, onExit }) {
-  const [participants, setParticipants] = useState([])
   const [questions, setQuestions] = useState([])
-  const [liveAnswers, setLiveAnswers] = useState([])
   const [editingParticipants, setEditingParticipants] = useState(false)
   const question = useCurrentQuestion(room)
-  const stats = useQuestionStats(room, question)
   const { setRoomLogo } = useContext(RoomBrandingContext)
+  const [participants, setParticipants] = useLobbyParticipants(room.id)
+  const liveAnswers = useLiveAnswers(question, room.status)
+
+  // El admin ya tiene todas las respuestas (con is_correct) vía useLiveAnswers,
+  // así que las stats se calculan en cliente en vez de llamar a
+  // get_question_stats (un RPC menos por pregunta). El participante sí usa el
+  // RPC porque RLS no le deja leer answers.
+  const stats = useMemo(() => {
+    const total = liveAnswers.length
+    const correct = liveAnswers.filter((a) => a.is_correct).length
+    return { total, correct, pct: total ? Math.round((correct / total) * 100) : 0 }
+  }, [liveAnswers])
 
   useRoomSubscription(room.id, setRoom)
 
@@ -1416,67 +1501,6 @@ function AdminRoom({ room, setRoom, onExit }) {
         ),
       )
   }, [room.id])
-
-  // Participantes en vivo (INSERT mientras la sala está abierta, UPDATE para scores)
-  useEffect(() => {
-    supabase
-      .from('participants')
-      .select('*')
-      .eq('room_id', room.id)
-      .then(({ data }) => setParticipants(data ?? []))
-    const channel = supabase
-      .channel(`participants-${room.id}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'participants', filter: `room_id=eq.${room.id}` },
-        (payload) => setParticipants((prev) => [...prev, payload.new]),
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'participants', filter: `room_id=eq.${room.id}` },
-        (payload) =>
-          setParticipants((prev) => prev.map((p) => (p.id === payload.new.id ? payload.new : p))),
-      )
-      .on(
-        'postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'participants', filter: `room_id=eq.${room.id}` },
-        (payload) => setParticipants((prev) => prev.filter((p) => p.id !== payload.old.id)),
-      )
-      .subscribe()
-    return () => supabase.removeChannel(channel)
-  }, [room.id])
-
-  // Limpia las respuestas en vivo solo al cambiar de pregunta (no al pasar de
-  // in_question a showing_results, donde queremos conservar el desglose).
-  useEffect(() => {
-    setLiveAnswers([])
-  }, [question?.id])
-
-  // Respuestas en vivo de la pregunta actual (solo el admin lo necesita). Se
-  // refresca tanto en in_question como en showing_results para el desglose.
-  useEffect(() => {
-    if (!question || !['in_question', 'showing_results'].includes(room.status)) return
-    let active = true
-    supabase
-      .from('answers')
-      .select('*')
-      .eq('question_id', question.id)
-      .then(({ data }) => {
-        if (active) setLiveAnswers(data ?? [])
-      })
-    const channel = supabase
-      .channel(`answers-${question.id}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'answers', filter: `question_id=eq.${question.id}` },
-        (payload) => setLiveAnswers((prev) => [...prev, payload.new]),
-      )
-      .subscribe()
-    return () => {
-      active = false
-      supabase.removeChannel(channel)
-    }
-  }, [question?.id, room.status])
 
   const updateRoom = async (fields) => {
     const { data, error } = await supabase
@@ -1816,9 +1840,12 @@ function ParticipantApp({ onHome }) {
 
   const loadOpenRooms = async () => {
     setReloading(true)
+    // La lista solo muestra nombre, código y antigüedad; la fila completa
+    // (incluidas las URLs de imágenes) se carga al unirse (join), así que aquí
+    // pedimos solo lo necesario para no transferir columnas de más.
     const { data } = await supabase
       .from('rooms')
-      .select('*')
+      .select('id, name, created_at')
       .eq('status', 'open')
       .order('created_at', { ascending: false })
     setOpenRooms(data ?? [])
