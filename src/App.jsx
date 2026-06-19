@@ -1711,7 +1711,7 @@ function AdminRoom({ room, setRoom, onExit }) {
                 <p className="text-sm font-medium uppercase tracking-widest text-zinc-400">
                   Pregunta {room.current_question_index + 1} de {questions.length}
                 </p>
-                <h3 className="text-2xl font-bold leading-tight sm:text-4xl">
+                <h3 className="text-xl font-bold leading-tight sm:text-3xl">
                   <NoCopy>{question.title}</NoCopy>
                 </h3>
                 {phase === 'reading' && (
@@ -2075,8 +2075,8 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
           )}
 
           {room.status === 'in_question' && question && (
-            <div className="space-y-5">
-              <h3 className="text-center text-xl font-bold leading-snug sm:text-2xl">
+            <div className="space-y-4">
+              <h3 className="text-center text-lg font-bold leading-snug sm:text-xl">
                 <NoCopy>{question.title}</NoCopy>
               </h3>
               {phase === 'reading' && (
@@ -2111,14 +2111,14 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
                       disabled={disabled}
                       onClick={() => answer(l)}
                       aria-label={`Opción ${l}: ${opt}`}
-                      className={`relative flex min-h-[5rem] items-center gap-3 rounded-2xl p-4 text-left text-white shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-50 ${solid} ${disabled ? '' : hover} ${
+                      className={`relative flex min-h-[4.5rem] items-center gap-3 rounded-2xl px-4 py-3 text-left text-white shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-50 ${solid} ${disabled ? '' : hover} ${
                         selected ? 'ring-4 ring-white ring-offset-2 ring-offset-zinc-50 dark:ring-offset-zinc-950' : ''
                       }`}
                     >
-                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/20">
-                        <Icon className="h-5 w-5" aria-hidden="true" />
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/20">
+                        <Icon className="h-4 w-4" aria-hidden="true" />
                       </span>
-                      <span className="font-semibold leading-snug">
+                      <span className="min-w-0 text-sm font-semibold leading-snug sm:text-base">
                         <span className="mr-1 opacity-80">{l}.</span>
                         <NoCopy>{opt}</NoCopy>
                       </span>
