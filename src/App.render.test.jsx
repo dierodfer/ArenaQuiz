@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import App from './App'
+import App, { readRoomHash, saveSession, loadSession, clearSession } from './App'
 import { supabase } from './supabaseClient'
 
 // Query builder encadenable que imita la API thenable de @supabase/supabase-js
@@ -45,14 +45,21 @@ vi.mock('./supabaseClient', () => ({
 
 beforeEach(() => {
   vi.mocked(supabase.auth.getSession).mockResolvedValue({ data: { session: null } })
+  location.hash = ''
+  sessionStorage.clear()
+})
+
+afterEach(() => {
+  location.hash = ''
+  sessionStorage.clear()
 })
 
 describe('App', () => {
-  it('muestra la pantalla de selección de rol al cargar', () => {
+  it('muestra solo la entrada de admin cuando no hay hash de sala', () => {
     render(<App />)
     expect(screen.getByRole('heading', { name: 'ArenaQuiz', level: 1 })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Soy Admin' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Soy Participante' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Soy Participante' })).not.toBeInTheDocument()
   })
 
   it('flujo admin sin sesión: muestra solo el login (sin auto-registro)', async () => {
@@ -99,14 +106,59 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: 'Guardar pregunta' })).toBeInTheDocument()
   })
 
-  it('flujo participante: muestra el formulario para unirse a una sala', async () => {
-    const user = userEvent.setup()
+  it('con hash de sala válido: muestra el flujo de participante', async () => {
+    location.hash = '#ABC123'
+    vi.mocked(supabase.from).mockReturnValue(createQueryBuilder([{ id: 'ABC123', name: 'Test room' }]))
     render(<App />)
+    expect(await screen.findByText('Reconectando…')).toBeInTheDocument()
+  })
 
-    await user.click(screen.getByRole('button', { name: 'Soy Participante' }))
+  it('con hash inválido: muestra la entrada de admin', () => {
+    location.hash = '#bad'
+    render(<App />)
+    expect(screen.getByRole('button', { name: 'Soy Admin' })).toBeInTheDocument()
+  })
+})
 
-    expect(screen.getByText('Unirse a una sala')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('Tu nombre')).toBeInTheDocument()
-    expect(screen.getByText('Elige una sala:')).toBeInTheDocument()
+describe('readRoomHash', () => {
+  afterEach(() => { location.hash = '' })
+
+  it('lee un código válido de 6 caracteres del hash', () => {
+    location.hash = '#ABC123'
+    expect(readRoomHash()).toBe('ABC123')
+  })
+
+  it('convierte a mayúsculas', () => {
+    location.hash = '#abc123'
+    expect(readRoomHash()).toBe('ABC123')
+  })
+
+  it('devuelve null si el hash no es un código válido', () => {
+    location.hash = '#too-long-code'
+    expect(readRoomHash()).toBeNull()
+    location.hash = ''
+    expect(readRoomHash()).toBeNull()
+    location.hash = '#AB'
+    expect(readRoomHash()).toBeNull()
+  })
+})
+
+describe('session helpers', () => {
+  afterEach(() => sessionStorage.clear())
+
+  it('saveSession / loadSession round-trip', () => {
+    saveSession('ROOM01', 'participant-uuid')
+    const s = loadSession()
+    expect(s).toEqual({ roomId: 'ROOM01', participantId: 'participant-uuid' })
+  })
+
+  it('loadSession devuelve null sin sesión guardada', () => {
+    expect(loadSession()).toBeNull()
+  })
+
+  it('clearSession limpia la sesión', () => {
+    saveSession('ROOM01', 'p-id')
+    clearSession()
+    expect(loadSession()).toBeNull()
   })
 })

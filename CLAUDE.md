@@ -56,7 +56,8 @@ Las tablas `rooms`, `participants` y `answers` están en la publicación `supaba
 - Los participantes acceden a la pregunta y a las estadísticas vía **funciones RPC** (`security definer`, bypasean RLS de forma controlada):
   - `get_current_question(p_room_id)`: devuelve la pregunta actual (join `rooms`→`room_questions`→`questions`); `correct_answer` viene `null` salvo cuando `status = 'showing_results'`.
   - `get_question_stats(p_question_id)`: devuelve `{ total, correct }` agregados, sin exponer respuestas individuales.
-  - `submit_answer(p_question_id, p_participant_id, p_answer)`: inserta la respuesta, calcula `is_correct` en el servidor y suma +100 al score si es correcta de forma atómica. El cliente nunca decide si acertó ni el nuevo score.
+  - `submit_answer(p_question_id, p_participant_id, p_answer)`: inserta la respuesta, calcula `is_correct` en el servidor y suma +100 al score si es correcta de forma atómica. **Idempotente**: si ya existe una respuesta para ese par (question, participant), devuelve los datos almacenados sin error ni doble score (soporta reconexión / doble clic). El cliente nunca decide si acertó ni el nuevo score.
+  - `get_my_answer(p_question_id, p_participant_id)`: devuelve `{ answer, is_correct }` de la respuesta del participante (o vacío si no ha respondido). Usado para restaurar el estado tras una reconexión a mitad de pregunta.
 - `useCurrentQuestion` y `useQuestionStats` (compartidos por admin y participante) llaman siempre a estas RPC, no a las tablas directamente. El admin sí lee `questions`/`room_questions`/`answers` directamente en `QuestionBank`, `CreateRoom` y el tally en vivo de `AdminRoom` (permitido por RLS al ser el dueño).
 - `cleanup_finished_room(p_room_id)`: al llegar a `finished`, borra `room_questions` y `answers` de esa sala (conserva `rooms`/`participants` para el ranking y `questions`, que es el banco del admin). Solo el admin dueño puede ejecutarla, y solo si la sala ya está `finished`.
 - Si añades nuevas queries desde el cliente, comprueba si necesitan política RLS nueva en `schema.sql` o si deben pasar por una función `security definer`.
@@ -75,7 +76,35 @@ waiting → open → closed → in_question ⇄ showing_results → finished
 - `in_question` → `showing_results`: lo dispara automáticamente el timer del ADMIN al llegar a 0, o manualmente el admin con el botón "Saltar pregunta" (`closeQuestion`, misma transición que `onTimeUp`).
 - `showing_results` → `in_question`: botón "Siguiente" incrementa `current_question_index` y vuelve a `in_question` en el mismo UPDATE. Si no quedan preguntas → `finished`.
 - Cualquier estado de juego (`in_question`/`showing_results`) → `finished`: el admin puede saltar el resto de la encuesta e ir directo al ranking con el botón "Finalizar encuesta" (`skipSurvey`, con `window.confirm`; ambos caminos pasan por `finishSurvey`).
-- Al llegar a `finished`, el admin llama además a `cleanup_finished_room` (RPC) para borrar los datos efímeros de la sala (ver sección RLS). Tanto admin ("Volver al menú") como participante ("Volver al inicio") tienen un botón para salir de la sala tras el ranking; el del participante (`onHome`) vuelve a la pantalla de selección de rol.
+- Al llegar a `finished`, el admin llama además a `cleanup_finished_room` (RPC) para borrar los datos efímeros de la sala (ver sección RLS). Tanto admin ("Volver al menú") como participante ("Volver al inicio") tienen un botón para salir de la sala tras el ranking; el del participante (`onHome`) limpia la sesión, el hash y vuelve a la pantalla principal.
+
+## Acceso por enlace y reconexión del participante
+
+Los participantes **solo pueden unirse a una sala a través de su enlace directo** (`https://<host>/ArenaQuiz/#ABC123`). No existe listado de salas abiertas: el admin comparte la URL (visible en `RoomCode` junto al código, con botón "Copiar enlace") y los participantes la abren en su navegador.
+
+### Resolución al cargar
+
+1. **¿Hay sesión en `sessionStorage`?** → reconexión automática: fetch en paralelo de `rooms` y `participants` por id. Si ambos existen → entra directo a la sala (pantalla "Reconectando…"). Si falta alguno (expulsado / sala borrada) → limpia sesión y muestra error.
+2. **¿Hay `#CODE` válido?** → muestra el formulario de unirse (solo nombre + email opcional).
+3. **Nada** → pantalla principal solo con "Soy Admin".
+
+### Persistencia: `sessionStorage` (clave `aq-participant-session`)
+
+- Se guarda `{ roomId, participantId }` al unirse con éxito (`saveSession`).
+- Se limpia al salir ("Volver al inicio" → `clearSession` + `clearRoomHash`) o si la sala/participante ya no existen.
+- `sessionStorage` sobrevive a recargas de página pero NO al cierre de pestaña; para ese caso, abrir el enlace `#CODE` de nuevo permite re-entrar con un nombre nuevo.
+
+### Hash de sala (`readRoomHash` / `setRoomHash` / `clearRoomHash`)
+
+- Regex: `^[A-Z0-9]{6}$` (acepta minúsculas, las convierte). Usa `history.replaceState` para no ensuciar el historial.
+- `buildRoomUrl(roomId)` construye la URL completa para compartir.
+
+### Reconexión a mitad de pregunta
+
+- Tras reconectar, `ParticipantRoom` llama a `get_my_answer(RPC)` para restaurar `myAnswer` si ya habías respondido la pregunta en curso.
+- `submit_answer` es idempotente: un doble envío devuelve los datos ya almacenados sin error.
+- `useRoomSubscription` re-lee la fila de `rooms` al reconectar el canal (`SUBSCRIBED`), sincronizando el estado tras un corte de red sin recarga.
+- El score del participante se re-sincroniza al cambiar de pregunta (fetch de `participants.score`).
 
 ## Imágenes de sala (Supabase Storage)
 

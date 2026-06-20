@@ -3,7 +3,7 @@ import { motion, MotionConfig } from 'framer-motion'
 import {
   Sun, Moon, Target, Loader2, LogIn, Mail, Lock, Unlock, Plus, Library, LogOut,
   ArrowLeft, Tag, Trash2, Clock, ListChecks, Users, User, Play, Copy, Check, X, Pencil,
-  RefreshCw, Trophy, Medal, Crown, CheckCircle2, XCircle, MinusCircle, AlertCircle,
+  Trophy, Medal, Crown, CheckCircle2, XCircle, MinusCircle, AlertCircle,
   ChevronRight, Triangle, Diamond, Circle, Square, Eye, SkipForward, Upload, ChevronDown, Home,
   MessageSquare, Image as ImageIcon,
 } from 'lucide-react'
@@ -60,6 +60,46 @@ async function uploadRoomImage(roomId, kind, file) {
 // mientras estás dentro de una sala. La sala (admin o participante) lo publica
 // vía este contexto; el Header lo consume.
 const RoomBrandingContext = createContext({ setRoomLogo: () => {} })
+
+// ---------- Reconexión: sesión del participante + hash de sala ----------
+
+const SESSION_KEY = 'aq-participant-session'
+const ROOM_CODE_RE = /^[A-Z0-9]{6}$/
+
+export function readRoomHash() {
+  const h = location.hash.replace('#', '').toUpperCase()
+  return ROOM_CODE_RE.test(h) ? h : null
+}
+
+function setRoomHash(code) {
+  history.replaceState(null, '', `${location.pathname}${location.search}#${code}`)
+}
+
+function clearRoomHash() {
+  history.replaceState(null, '', `${location.pathname}${location.search}`)
+}
+
+export function saveSession(roomId, participantId) {
+  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ roomId, participantId })) } catch {}
+}
+
+export function loadSession() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY)
+    if (!raw) return null
+    const s = JSON.parse(raw)
+    if (s?.roomId && s?.participantId) return s
+  } catch {}
+  return null
+}
+
+export function clearSession() {
+  try { sessionStorage.removeItem(SESSION_KEY) } catch {}
+}
+
+function buildRoomUrl(roomId) {
+  return `${location.origin}${location.pathname}#${roomId}`
+}
 
 // Marcas diacríticas combinantes (acentos) en Unicode, para poder quitarlas.
 const DIACRITICS = new RegExp('[\\u0300-\\u036f]', 'g')
@@ -229,7 +269,12 @@ function useRoomSubscription(roomId, setRoom) {
         { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` },
         (payload) => setRoom(payload.new),
       )
-      .subscribe()
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          supabase.from('rooms').select('*').eq('id', roomId).single()
+            .then(({ data }) => { if (data) setRoom(data) })
+        }
+      })
     return () => supabase.removeChannel(channel)
   }, [roomId])
 }
@@ -470,9 +515,10 @@ function StatusBadge({ status }) {
 // Código PIN de la sala, protagonista del lobby y pensado para proyección.
 function RoomCode({ code }) {
   const [copied, setCopied] = useState(false)
+  const url = buildRoomUrl(code)
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(code)
+      await navigator.clipboard.writeText(url)
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     } catch {
@@ -487,9 +533,10 @@ function RoomCode({ code }) {
       <p className="mt-2 font-mono text-5xl font-bold tracking-[0.15em] text-zinc-900 sm:text-7xl dark:text-white">
         {code}
       </p>
+      <p className="mt-2 break-all text-xs text-zinc-400 dark:text-zinc-500">{url}</p>
       <button type="button" onClick={copy} className="btn-ghost mx-auto mt-3">
         {copied ? <Check className="h-4 w-4 text-emerald-500" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
-        {copied ? 'Copiado' : 'Copiar código'}
+        {copied ? 'Copiado' : 'Copiar enlace'}
       </button>
     </div>
   )
@@ -1829,40 +1876,46 @@ function AdminRoom({ room, setRoom, onExit }) {
 
 // ---------- PARTICIPANTE ----------
 
-function ParticipantApp({ onHome }) {
+function ParticipantApp({ roomCode, onHome }) {
   const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [participant, setParticipant] = useState(null)
   const [room, setRoom] = useState(null)
-  const [selectedRoomId, setSelectedRoomId] = useState(null)
-  const [openRooms, setOpenRooms] = useState([])
-  const [reloading, setReloading] = useState(false)
+  const [roomName, setRoomName] = useState(null)
+  const [restoring, setRestoring] = useState(true)
   const [error, setError] = useState('')
 
-  const loadOpenRooms = async () => {
-    setReloading(true)
-    // La lista solo muestra nombre, código y antigüedad; la fila completa
-    // (incluidas las URLs de imágenes) se carga al unirse (join), así que aquí
-    // pedimos solo lo necesario para no transferir columnas de más.
-    const { data } = await supabase
-      .from('rooms')
-      .select('id, name, created_at')
-      .eq('status', 'open')
-      .order('created_at', { ascending: false })
-    setOpenRooms(data ?? [])
-    // Mantiene la animación de recarga visible un instante aunque la consulta
-    // sea casi instantánea.
-    setTimeout(() => setReloading(false), 400)
-  }
-
+  // Restaurar sesión de sessionStorage o precargar nombre de sala del hash
   useEffect(() => {
-    if (participant) return
-    loadOpenRooms()
-  }, [participant])
+    let cancelled = false
+    ;(async () => {
+      const saved = loadSession()
+      if (saved && saved.roomId === roomCode) {
+        const [{ data: r }, { data: p }] = await Promise.all([
+          supabase.from('rooms').select('*').eq('id', saved.roomId).single(),
+          supabase.from('participants').select('*').eq('id', saved.participantId).single(),
+        ])
+        if (!cancelled && r && p && p.room_id === r.id) {
+          setRoom(r)
+          setParticipant(p)
+          setRestoring(false)
+          return
+        }
+        clearSession()
+      }
+      // Sin sesión válida: cargar el nombre de la sala para mostrarlo
+      const { data: r } = await supabase.from('rooms').select('id, name').eq('id', roomCode).single()
+      if (!cancelled) {
+        setRoomName(r?.name ?? null)
+        setRestoring(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [roomCode])
 
   const usernameError = validateUsername(username)
   const emailError = validateEmail(email)
-  const canJoin = !usernameError && !emailError && !!selectedRoomId
+  const canJoin = !usernameError && !emailError
 
   const join = async () => {
     setError('')
@@ -1870,7 +1923,7 @@ function ParticipantApp({ onHome }) {
     const { data: r, error: rErr } = await supabase
       .from('rooms')
       .select('*')
-      .eq('id', selectedRoomId)
+      .eq('id', roomCode)
       .single()
     if (rErr || !r) return setError('Sala no encontrada')
     if (r.status !== 'open') return setError('La sala ya no está abierta')
@@ -1880,19 +1933,55 @@ function ParticipantApp({ onHome }) {
       .select()
       .single()
     if (pErr) return setError(pErr.message)
+    saveSession(r.id, p.id)
     setRoom(r)
     setParticipant(p)
   }
 
+  const handleHome = () => {
+    clearSession()
+    clearRoomHash()
+    onHome()
+  }
+
+  if (restoring) {
+    return (
+      <Stage>
+        <Panel className="flex flex-col items-center gap-4 p-8 text-center">
+          <Loader2 className="h-8 w-8 animate-spin text-indigo-500" aria-hidden="true" />
+          <p className="font-medium">Reconectando…</p>
+        </Panel>
+      </Stage>
+    )
+  }
+
   if (participant && room) {
-    return <ParticipantRoom room={room} setRoom={setRoom} participant={participant} onHome={onHome} />
+    return <ParticipantRoom room={room} setRoom={setRoom} participant={participant} onHome={handleHome} />
+  }
+
+  if (!roomName) {
+    return (
+      <Stage>
+        <Panel className="space-y-4 p-6 text-center sm:p-8">
+          <AlertCircle className="mx-auto h-10 w-10 text-zinc-400" aria-hidden="true" />
+          <p className="font-medium">Sala no encontrada</p>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            El código <span className="font-mono font-semibold">{roomCode}</span> no corresponde a ninguna sala.
+          </p>
+          <button className="btn-secondary mx-auto max-w-xs" onClick={handleHome}>
+            <Home className="h-4 w-4" aria-hidden="true" />
+            Volver al inicio
+          </button>
+        </Panel>
+      </Stage>
+    )
   }
 
   return (
     <Stage>
       <motion.div initial={enter.initial} animate={enter.animate} transition={enterTransition}>
         <Panel className="space-y-6 p-6 sm:p-8">
-          <ScreenHeader icon={Users} title="Unirse a una sala" subtitle="Elige tu nombre y una sala abierta" />
+          <ScreenHeader icon={Users} title={roomName} subtitle={`Código: ${roomCode}`} />
           <form
             className="space-y-5"
             onSubmit={(e) => {
@@ -1947,44 +2036,6 @@ function ParticipantApp({ onHome }) {
               )}
             </div>
 
-            <div>
-              <div className="mb-2 flex items-center justify-between">
-                <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Elige una sala:</p>
-                <button type="button" onClick={loadOpenRooms} disabled={reloading} className="btn-ghost">
-                  <RefreshCw className={`h-4 w-4 ${reloading ? 'animate-spin' : ''}`} aria-hidden="true" />
-                  Recargar salas
-                </button>
-              </div>
-              {openRooms.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-zinc-300 p-6 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-                  No hay salas abiertas ahora mismo.
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-2">
-                  {openRooms.map((r) => {
-                    const active = selectedRoomId === r.id
-                    return (
-                      <button
-                        key={r.id}
-                        type="button"
-                        aria-pressed={active}
-                        onClick={() => setSelectedRoomId(r.id)}
-                        className={`flex flex-col items-center gap-0.5 text-center ${selectClasses(active)}`}
-                      >
-                        <span className="w-full truncate font-semibold">{r.name}</span>
-                        <span className={`font-mono text-xs tracking-widest ${active ? 'text-indigo-100' : 'text-zinc-400'}`}>
-                          {r.id}
-                        </span>
-                        <span className={`text-xs ${active ? 'text-indigo-100' : 'text-zinc-400'}`}>
-                          {formatRelativeTime(r.created_at)}
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-
             {error && (
               <p className="flex items-center gap-1.5 text-sm text-rose-600 dark:text-rose-400">
                 <AlertCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -2012,6 +2063,9 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
 
   useRoomSubscription(room.id, setRoom)
 
+  // Asegurar que el hash esté en la URL (reconexión desde sessionStorage)
+  useEffect(() => { setRoomHash(room.id) }, [room.id])
+
   // El logo de la sala sustituye al branding de la app en el Header mientras
   // estamos dentro; se restablece al salir.
   useEffect(() => {
@@ -2019,9 +2073,30 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
     return () => setRoomLogo(null)
   }, [room.logo_image, setRoomLogo])
 
-  // Nueva pregunta → limpiar respuesta anterior
+  // Nueva pregunta → limpiar respuesta anterior y restaurar si ya respondimos
+  // (reconexión a mitad de pregunta).
   useEffect(() => {
     setMyAnswer(null)
+    if (!question || !['in_question', 'showing_results'].includes(room.status)) return
+    supabase
+      .rpc('get_my_answer', { p_question_id: question.id, p_participant_id: participant.id })
+      .then(({ data }) => {
+        const row = data?.[0]
+        if (row) {
+          setMyAnswer({ answer: row.answer, is_correct: row.is_correct })
+          setScore(participant.score)
+        }
+      })
+  }, [question?.id])
+
+  // Mantener el score sincronizado si el participante fue recargado
+  useEffect(() => {
+    supabase
+      .from('participants')
+      .select('score')
+      .eq('id', participant.id)
+      .single()
+      .then(({ data }) => { if (data) setScore(data.score) })
   }, [room.current_question_index])
 
   // El participante no cierra la pregunta: cuando su timer llega a 0 solo
@@ -2030,14 +2105,15 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
 
   const answer = async (letter) => {
     if (myAnswer || !question) return
-    // El servidor decide si es correcta y actualiza el score (submit_answer);
-    // el cliente nunca calcula is_correct ni el nuevo score.
     const { data, error } = await supabase.rpc('submit_answer', {
       p_question_id: question.id,
       p_participant_id: participant.id,
       p_answer: letter,
     })
-    if (error) return alert(error.message)
+    if (error) {
+      if (error.code === '23505') return // duplicate — already answered
+      return alert(error.message)
+    }
     const result = data?.[0]
     setMyAnswer({ answer: letter, is_correct: result?.is_correct ?? false })
     if (result) setScore(result.new_score)
@@ -2229,7 +2305,7 @@ function Header({ theme, setTheme, roomLogo }) {
   )
 }
 
-function RoleSelect({ onPick }) {
+function AdminEntry({ onPick }) {
   return (
     <Stage>
       <motion.div initial={enter.initial} animate={enter.animate} transition={enterTransition}>
@@ -2240,10 +2316,7 @@ function RoleSelect({ onPick }) {
           <h1 className="text-3xl font-bold tracking-tight">ArenaQuiz</h1>
           <p className="mt-2 text-zinc-500 dark:text-zinc-400">Quizzes y encuestas en tiempo real</p>
         </div>
-        <div className="grid gap-3">
-          <MenuCard icon={Target} title="Soy Admin" desc="Crea y dirige salas en vivo" onClick={() => onPick('admin')} accent />
-          <MenuCard icon={Users} title="Soy Participante" desc="Únete con tu nombre y juega" onClick={() => onPick('participant')} />
-        </div>
+        <MenuCard icon={Target} title="Soy Admin" desc="Crea y dirige salas en vivo" onClick={() => onPick('admin')} accent />
       </motion.div>
     </Stage>
   )
@@ -2251,10 +2324,21 @@ function RoleSelect({ onPick }) {
 
 export default function App() {
   const [theme, setTheme] = useTheme()
-  const [role, setRole] = useState(null)
-  // Logo de la sala activa: lo publica AdminRoom/ParticipantRoom vía el contexto
-  // y el Header lo usa para sustituir el branding de la app dentro de la sala.
+  const initialHash = readRoomHash()
+  const initialSession = loadSession()
+  const [role, setRole] = useState(() => {
+    if (initialHash) return 'participant'
+    if (initialSession) return 'participant'
+    return null
+  })
+  const [roomCode, setRoomCode] = useState(() => initialHash || initialSession?.roomId || null)
   const [roomLogo, setRoomLogo] = useState(null)
+
+  const handleHome = () => {
+    setRoomLogo(null)
+    setRoomCode(null)
+    setRole(null)
+  }
 
   return (
     <MotionConfig reducedMotion="user">
@@ -2262,12 +2346,12 @@ export default function App() {
         <div className="min-h-screen bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
           <Header theme={theme} setTheme={setTheme} roomLogo={roomLogo} />
           <main className="px-4 py-8 sm:py-12">
-            {!role ? (
-              <RoleSelect onPick={setRole} />
-            ) : role === 'admin' ? (
+            {role === 'admin' ? (
               <AdminApp />
+            ) : role === 'participant' && roomCode ? (
+              <ParticipantApp roomCode={roomCode} onHome={handleHome} />
             ) : (
-              <ParticipantApp onHome={() => setRole(null)} />
+              <AdminEntry onPick={setRole} />
             )}
           </main>
         </div>
