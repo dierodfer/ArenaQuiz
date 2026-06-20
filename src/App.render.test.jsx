@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App, { readRoomHash, saveSession, loadSession, clearSession } from './App'
 import { supabase } from './supabaseClient'
@@ -55,11 +55,11 @@ afterEach(() => {
 })
 
 describe('App', () => {
-  it('muestra solo la entrada de admin cuando no hay hash de sala', () => {
+  it('muestra la pantalla de selección de rol al cargar', () => {
     render(<App />)
     expect(screen.getByRole('heading', { name: 'ArenaQuiz', level: 1 })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Soy Admin' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Soy Participante' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Soy Participante' })).toBeInTheDocument()
   })
 
   it('flujo admin sin sesión: muestra solo el login (sin auto-registro)', async () => {
@@ -106,17 +106,30 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: 'Guardar pregunta' })).toBeInTheDocument()
   })
 
-  it('con hash de sala válido: muestra el flujo de participante', async () => {
-    location.hash = '#ABC123'
-    vi.mocked(supabase.from).mockReturnValue(createQueryBuilder([{ id: 'ABC123', name: 'Test room' }]))
+  it('flujo participante: muestra el formulario para unirse a una sala', async () => {
+    const user = userEvent.setup()
     render(<App />)
-    expect(await screen.findByText('Reconectando…')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Soy Participante' }))
+
+    expect(screen.getByText('Unirse a una sala')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Tu nombre')).toBeInTheDocument()
+    expect(screen.getByText('Elige una sala:')).toBeInTheDocument()
   })
 
-  it('con hash inválido: muestra la entrada de admin', () => {
+  it('con hash de sala válido: va directo al formulario de participante', () => {
+    location.hash = '#ABC123'
+    render(<App />)
+    expect(screen.getByText('Unirse a una sala')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Tu nombre')).toBeInTheDocument()
+    expect(screen.queryByText('Elige una sala:')).not.toBeInTheDocument()
+  })
+
+  it('con hash inválido: muestra la selección de rol normal', () => {
     location.hash = '#bad'
     render(<App />)
     expect(screen.getByRole('button', { name: 'Soy Admin' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Soy Participante' })).toBeInTheDocument()
   })
 })
 

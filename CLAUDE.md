@@ -78,33 +78,21 @@ waiting → open → closed → in_question ⇄ showing_results → finished
 - Cualquier estado de juego (`in_question`/`showing_results`) → `finished`: el admin puede saltar el resto de la encuesta e ir directo al ranking con el botón "Finalizar encuesta" (`skipSurvey`, con `window.confirm`; ambos caminos pasan por `finishSurvey`).
 - Al llegar a `finished`, el admin llama además a `cleanup_finished_room` (RPC) para borrar los datos efímeros de la sala (ver sección RLS). Tanto admin ("Volver al menú") como participante ("Volver al inicio") tienen un botón para salir de la sala tras el ranking; el del participante (`onHome`) limpia la sesión, el hash y vuelve a la pantalla principal.
 
-## Acceso por enlace y reconexión del participante
+## Acceso por enlace (hash) del participante
 
-Los participantes **solo pueden unirse a una sala a través de su enlace directo** (`https://<host>/ArenaQuiz/#ABC123`). No existe listado de salas abiertas: el admin comparte la URL (visible en `RoomCode` junto al código, con botón "Copiar enlace") y los participantes la abren en su navegador.
-
-### Resolución al cargar
-
-1. **¿Hay sesión en `sessionStorage`?** → reconexión automática: fetch en paralelo de `rooms` y `participants` por id. Si ambos existen → entra directo a la sala (pantalla "Reconectando…"). Si falta alguno (expulsado / sala borrada) → limpia sesión y muestra error.
-2. **¿Hay `#CODE` válido?** → muestra el formulario de unirse (solo nombre + email opcional).
-3. **Nada** → pantalla principal solo con "Soy Admin".
-
-### Persistencia: `sessionStorage` (clave `aq-participant-session`)
-
-- Se guarda `{ roomId, participantId }` al unirse con éxito (`saveSession`).
-- Se limpia al salir ("Volver al inicio" → `clearSession` + `clearRoomHash`) o si la sala/participante ya no existen.
-- `sessionStorage` sobrevive a recargas de página pero NO al cierre de pestaña; para ese caso, abrir el enlace `#CODE` de nuevo permite re-entrar con un nombre nuevo.
+Los participantes pueden unirse de dos formas: desde la pantalla principal ("Soy Participante" → lista de salas abiertas) o **abriendo un enlace directo** (`https://<host>/ArenaQuiz/#ABC123`). Si hay hash válido en la URL al cargar, la app salta directamente al formulario de unirse con esa sala preseleccionada.
 
 ### Hash de sala (`readRoomHash` / `setRoomHash` / `clearRoomHash`)
 
 - Regex: `^[A-Z0-9]{6}$` (acepta minúsculas, las convierte). Usa `history.replaceState` para no ensuciar el historial.
-- `buildRoomUrl(roomId)` construye la URL completa para compartir.
+- Al unirse con éxito, `ParticipantApp` pone el hash en la URL (`setRoomHash`). Al salir ("Volver al inicio") se limpia (`clearRoomHash`).
+- `buildRoomUrl(roomId)` construye la URL completa para compartir; el admin la ve en `RoomCode` con botón "Copiar enlace".
 
-### Reconexión a mitad de pregunta
+### Sin reconexión automática
 
-- Tras reconectar, `ParticipantRoom` llama a `get_my_answer(RPC)` para restaurar `myAnswer` si ya habías respondido la pregunta en curso.
-- `submit_answer` es idempotente: un doble envío devuelve los datos ya almacenados sin error.
-- `useRoomSubscription` re-lee la fila de `rooms` al reconectar el canal (`SUBSCRIBED`), sincronizando el estado tras un corte de red sin recarga.
-- El score del participante se re-sincroniza al cambiar de pregunta (fetch de `participants.score`).
+- **No hay `sessionStorage` de sesión activa**: si el participante recarga la página o cierra la pestaña, pierde su sesión y vuelve al formulario de unirse (o a la pantalla principal si no hay hash). Los helpers `saveSession`/`loadSession`/`clearSession` existen exportados (y testeados) pero no se usan en el flujo actual.
+- `submit_answer` es idempotente: si por alguna razón se envía dos veces, devuelve los datos ya almacenados sin error ni doble score.
+- `useRoomSubscription` re-lee la fila de `rooms` al reconectar el canal (`SUBSCRIBED`), sincronizando el estado tras un corte de red **sin recarga de página**.
 
 ## Imágenes de sala (Supabase Storage)
 
