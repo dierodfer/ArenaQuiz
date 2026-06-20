@@ -117,9 +117,19 @@ describe('App', () => {
     expect(screen.getByText('Elige una sala:')).toBeInTheDocument()
   })
 
-  it('con hash de sala válido: va directo al formulario de participante', () => {
+  it('con hash de sala válido: muestra selector de rol con código de sala', () => {
     location.hash = '#ABC123'
     render(<App />)
+    expect(screen.getByText('Sala detectada: ABC123')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Soy Admin' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Soy Participante' })).toBeInTheDocument()
+  })
+
+  it('con hash válido + clic en participante: va al formulario de unirse sin lista', async () => {
+    location.hash = '#ABC123'
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'Soy Participante' }))
     expect(screen.getByText('Unirse a una sala')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Tu nombre')).toBeInTheDocument()
     expect(screen.queryByText('Elige una sala:')).not.toBeInTheDocument()
@@ -130,6 +140,22 @@ describe('App', () => {
     render(<App />)
     expect(screen.getByRole('button', { name: 'Soy Admin' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Soy Participante' })).toBeInTheDocument()
+    expect(screen.queryByText(/Sala detectada/)).not.toBeInTheDocument()
+  })
+
+  it('admin con hash y sesión activa: pasa el código de sala al flujo admin', async () => {
+    location.hash = '#ABC123'
+    vi.mocked(supabase.auth.getSession).mockResolvedValue({
+      data: { session: { user: { id: 'admin-uid', email: 'admin@example.com' } } },
+    })
+
+    const user = userEvent.setup()
+    render(<App />)
+
+    expect(screen.getByText('Sala detectada: ABC123')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Soy Admin' }))
+
+    expect(await screen.findByText('admin@example.com')).toBeInTheDocument()
   })
 })
 

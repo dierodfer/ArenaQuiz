@@ -751,7 +751,7 @@ function Ranking({ roomId, highlightId, finishMessage, finishImage }) {
 
 // ---------- ADMIN ----------
 
-function AdminApp() {
+function AdminApp({ initialRoomCode }) {
   const [session, setSession] = useState(undefined) // undefined = cargando, null = sin sesión
   const [room, setRoom] = useState(null)
   const [view, setView] = useState('menu') // menu | create | bank
@@ -763,6 +763,12 @@ function AdminApp() {
     })
     return () => listener.subscription.unsubscribe()
   }, [])
+
+  useEffect(() => {
+    if (!initialRoomCode || !session || room) return
+    supabase.from('rooms').select('*').eq('id', initialRoomCode).eq('admin_id', session.user.id).single()
+      .then(({ data }) => { if (data?.id) setRoom(data) })
+  }, [initialRoomCode, session, room])
 
   if (session === undefined) {
     return (
@@ -776,7 +782,7 @@ function AdminApp() {
   }
 
   if (!session) return <AdminAuth />
-  if (room) return <AdminRoom room={room} setRoom={setRoom} onExit={() => { setRoom(null); setView('menu') }} />
+  if (room) return <AdminRoom room={room} setRoom={setRoom} onExit={() => { clearRoomHash(); setRoom(null); setView('menu') }} />
   if (view === 'create') {
     return <CreateRoom session={session} setRoom={setRoom} onBack={() => setView('menu')} />
   }
@@ -1529,6 +1535,8 @@ function AdminRoom({ room, setRoom, onExit }) {
 
   useRoomSubscription(room.id, setRoom)
 
+  useEffect(() => { setRoomHash(room.id) }, [room.id])
+
   // El logo de la sala sustituye al branding de la app en el Header mientras
   // estamos dentro; se restablece al salir.
   useEffect(() => {
@@ -2278,7 +2286,7 @@ function Header({ theme, setTheme, roomLogo }) {
   )
 }
 
-function RoleSelect({ onPick }) {
+function RoleSelect({ onPick, roomCode }) {
   return (
     <Stage>
       <motion.div initial={enter.initial} animate={enter.animate} transition={enterTransition}>
@@ -2289,9 +2297,14 @@ function RoleSelect({ onPick }) {
           <h1 className="text-3xl font-bold tracking-tight">ArenaQuiz</h1>
           <p className="mt-2 text-zinc-500 dark:text-zinc-400">Quizzes y encuestas en tiempo real</p>
         </div>
+        {roomCode && (
+          <p className="mb-4 text-center text-sm font-medium text-indigo-600 dark:text-indigo-400">
+            Sala detectada: {roomCode}
+          </p>
+        )}
         <div className="grid gap-3">
-          <MenuCard icon={Target} title="Soy Admin" desc="Crea y dirige salas en vivo" onClick={() => onPick('admin')} accent />
-          <MenuCard icon={Users} title="Soy Participante" desc="Únete con tu nombre y juega" onClick={() => onPick('participant')} />
+          <MenuCard icon={Target} title="Soy Admin" desc={roomCode ? 'Gestionar esta sala' : 'Crea y dirige salas en vivo'} onClick={() => onPick('admin')} accent />
+          <MenuCard icon={Users} title="Soy Participante" desc={roomCode ? 'Unirse a esta sala' : 'Únete con tu nombre y juega'} onClick={() => onPick('participant')} />
         </div>
       </motion.div>
     </Stage>
@@ -2300,9 +2313,8 @@ function RoleSelect({ onPick }) {
 
 export default function App() {
   const [theme, setTheme] = useTheme()
-  const initialHash = readRoomHash()
-  const [role, setRole] = useState(() => initialHash ? 'participant' : null)
-  const [roomCode] = useState(() => initialHash || null)
+  const [initialHash] = useState(() => readRoomHash())
+  const [role, setRole] = useState(null)
   const [roomLogo, setRoomLogo] = useState(null)
 
   const handleHome = () => {
@@ -2318,11 +2330,11 @@ export default function App() {
           <Header theme={theme} setTheme={setTheme} roomLogo={roomLogo} />
           <main className="px-4 py-8 sm:py-12">
             {role === 'admin' ? (
-              <AdminApp />
+              <AdminApp initialRoomCode={initialHash} />
             ) : role === 'participant' ? (
-              <ParticipantApp initialRoomCode={roomCode} onHome={handleHome} />
+              <ParticipantApp initialRoomCode={initialHash} onHome={handleHome} />
             ) : (
-              <RoleSelect onPick={setRole} />
+              <RoleSelect onPick={setRole} roomCode={initialHash} />
             )}
           </main>
         </div>

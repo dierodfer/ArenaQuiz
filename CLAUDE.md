@@ -78,14 +78,19 @@ waiting → open → closed → in_question ⇄ showing_results → finished
 - Cualquier estado de juego (`in_question`/`showing_results`) → `finished`: el admin puede saltar el resto de la encuesta e ir directo al ranking con el botón "Finalizar encuesta" (`skipSurvey`, con `window.confirm`; ambos caminos pasan por `finishSurvey`).
 - Al llegar a `finished`, el admin llama además a `cleanup_finished_room` (RPC) para borrar los datos efímeros de la sala (ver sección RLS). Tanto admin ("Volver al menú") como participante ("Volver al inicio") tienen un botón para salir de la sala tras el ranking; el del participante (`onHome`) limpia la sesión, el hash y vuelve a la pantalla principal.
 
-## Acceso por enlace (hash) del participante
+## Acceso por enlace (hash)
 
-Los participantes pueden unirse de dos formas: desde la pantalla principal ("Soy Participante" → lista de salas abiertas) o **abriendo un enlace directo** (`https://<host>/ArenaQuiz/#ABC123`). Si hay hash válido en la URL al cargar, la app salta directamente al formulario de unirse con esa sala preseleccionada.
+Tanto admin como participantes pueden acceder a una sala mediante URL con hash (`https://<host>/ArenaQuiz/#ABC123`). Si hay hash válido al cargar, la app muestra el selector de rol con el mensaje "Sala detectada: CODE" y descripciones contextuales ("Gestionar esta sala" / "Unirse a esta sala"). Al elegir rol, el hash se pasa al flujo correspondiente:
+
+- **Participante**: va directo al formulario de unirse (nombre + entrar), sin lista de salas.
+- **Admin**: tras autenticarse, intenta cargar esa sala (si es suya). Si no la encuentra, muestra el menú normal.
+
+Sin hash, el flujo es el habitual: participante ve la lista de salas abiertas; admin ve su menú.
 
 ### Hash de sala (`readRoomHash` / `setRoomHash` / `clearRoomHash`)
 
 - Regex: `^[A-Z0-9]{6}$` (acepta minúsculas, las convierte). Usa `history.replaceState` para no ensuciar el historial.
-- Al unirse con éxito, `ParticipantApp` pone el hash en la URL (`setRoomHash`). Al salir ("Volver al inicio") se limpia (`clearRoomHash`).
+- **Ambos roles** ponen el hash en la URL al entrar en una sala: `ParticipantApp` al unirse, `AdminRoom` al montar. Al salir se limpia (`clearRoomHash`).
 - `buildRoomUrl(roomId)` construye la URL completa para compartir; el admin la ve en `RoomCode` con botón "Copiar enlace".
 
 ### Sin reconexión automática
