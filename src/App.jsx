@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, createContext, useContext } from 'react'
 import { motion, MotionConfig } from 'framer-motion'
 import {
-  Sun, Moon, Target, Loader2, LogIn, Mail, Lock, Unlock, Plus, Library, LogOut,
+  Sun, Moon, Loader2, LogIn, Mail, Lock, Unlock, Plus, Library, LogOut,
   ArrowLeft, Tag, Trash2, Clock, ListChecks, Users, User, Play, Copy, Check, X, Pencil,
   RefreshCw, Trophy, Medal, Crown, CheckCircle2, XCircle, MinusCircle, AlertCircle,
   ChevronRight, Triangle, Diamond, Circle, Square, Eye, SkipForward, Upload, ChevronDown, Home,
@@ -12,6 +12,30 @@ import { supabase } from './supabaseClient'
 // node_modules, no en este repo. Importamos solo es+en para no inflar el bundle.
 import esBadWords from 'naughty-words/es.json'
 import enBadWords from 'naughty-words/en.json'
+
+function AppLogo({ className = 'h-8 w-8' }) {
+  return (
+    <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden="true">
+      {/* Accent dots — teal left, purple center, orange right */}
+      <rect x="26" y="6" width="6" height="14" rx="3" fill="#2AB5A0" transform="rotate(-20 29 13)" />
+      <rect x="47" y="2" width="6" height="14" rx="3" fill="#7C3AED" />
+      <rect x="68" y="6" width="6" height="14" rx="3" fill="#F59E0B" transform="rotate(20 71 13)" />
+      {/* Speech-bubble "a" */}
+      <path d="M50 22C31.2 22 16 36.5 16 54.4c0 10.1 4.8 19.2 12.4 25.2L24 92l14-7.6c3.8 1.2 7.8 1.8 12 1.8 18.8 0 34-14.5 34-32.4S68.8 22 50 22z" fill="#7C3AED" />
+      {/* Inner white circle */}
+      <circle cx="50" cy="54" r="14" fill="white" />
+    </svg>
+  )
+}
+
+function BrandText({ className = '' }) {
+  return (
+    <span className={`font-bold tracking-tight ${className}`}>
+      <span className="text-zinc-700 dark:text-zinc-200">arena</span>
+      <span className="text-[#2d1b69] dark:text-indigo-400">quiz</span>
+    </span>
+  )
+}
 
 const READ_SECONDS = 3
 const LETTERS = ['A', 'B', 'C', 'D']
@@ -2274,10 +2298,8 @@ function Header({ theme, setTheme, roomLogo }) {
           <img src={roomLogo} alt="Logo de la sala" className="h-9 max-w-[180px] object-contain" />
         ) : (
           <div className="flex items-center gap-2">
-            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white">
-              <Target className="h-5 w-5" aria-hidden="true" />
-            </span>
-            <span className="font-semibold tracking-tight">ArenaQuiz</span>
+            <AppLogo className="h-8 w-8" />
+            <BrandText className="text-base" />
           </div>
         )}
         <ThemeToggle theme={theme} setTheme={setTheme} />
@@ -2291,10 +2313,8 @@ function RoleSelect({ onPick, roomCode }) {
     <Stage>
       <motion.div initial={enter.initial} animate={enter.animate} transition={enterTransition}>
         <div className="mb-8 text-center">
-          <span className="mx-auto mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-600 text-white shadow-lg shadow-indigo-600/25">
-            <Target className="h-7 w-7" aria-hidden="true" />
-          </span>
-          <h1 className="text-3xl font-bold tracking-tight">ArenaQuiz</h1>
+          <AppLogo className="mx-auto mb-3 h-16 w-16" />
+          <h1 className="text-3xl"><BrandText /></h1>
           <p className="mt-2 text-zinc-500 dark:text-zinc-400">Quizzes y encuestas en tiempo real</p>
         </div>
         {roomCode && (
@@ -2303,7 +2323,7 @@ function RoleSelect({ onPick, roomCode }) {
           </p>
         )}
         <div className="grid gap-3">
-          <MenuCard icon={Target} title="Soy Admin" desc={roomCode ? 'Gestionar esta sala' : 'Crea y dirige salas en vivo'} onClick={() => onPick('admin')} accent />
+          <MenuCard icon={Crown} title="Soy Admin" desc={roomCode ? 'Gestionar esta sala' : 'Crea y dirige salas en vivo'} onClick={() => onPick('admin')} accent />
           <MenuCard icon={Users} title="Soy Participante" desc={roomCode ? 'Unirse a esta sala' : 'Únete con tu nombre y juega'} onClick={() => onPick('participant')} />
         </div>
       </motion.div>
