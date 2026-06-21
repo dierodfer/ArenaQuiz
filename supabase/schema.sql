@@ -262,7 +262,8 @@ grant execute on function get_question_stats(uuid) to anon, authenticated;
 
 -- Registra la respuesta de un participante: el servidor decide si es
 -- correcta y actualiza el score de forma atómica. El cliente nunca calcula
--- is_correct ni el nuevo score.
+-- is_correct ni el nuevo score. Idempotente: si ya existe la respuesta
+-- (reconexión / doble clic) devuelve los datos almacenados sin error.
 create or replace function submit_answer(p_question_id uuid, p_participant_id uuid, p_answer text)
 returns table (is_correct boolean, new_score int)
 language plpgsql
@@ -273,7 +274,17 @@ declare
   v_correct text;
   v_is_correct boolean;
   v_new_score int;
+  v_existing record;
 begin
+  -- Si ya existe una respuesta para esta pregunta/participante, devolver la existente
+  select a.is_correct, p.score into v_existing
+    from answers a join participants p on p.id = a.participant_id
+    where a.question_id = p_question_id and a.participant_id = p_participant_id;
+  if found then
+    return query select v_existing.is_correct, v_existing.score;
+    return;
+  end if;
+
   select correct_answer into v_correct from questions where id = p_question_id;
   if v_correct is null then
     raise exception 'question not found';
@@ -297,6 +308,21 @@ end;
 $$;
 
 grant execute on function submit_answer(uuid, uuid, text) to anon, authenticated;
+
+-- Devuelve la respuesta de un participante a una pregunta concreta (si existe).
+-- Usado por el cliente para restaurar el estado tras una reconexión a mitad de
+-- pregunta, ya que RLS no le permite leer la tabla answers directamente.
+create or replace function get_my_answer(p_question_id uuid, p_participant_id uuid)
+returns table (answer text, is_correct boolean)
+language sql
+security definer
+set search_path = public
+as $$
+  select answer, is_correct from answers
+  where question_id = p_question_id and participant_id = p_participant_id;
+$$;
+
+grant execute on function get_my_answer(uuid, uuid) to anon, authenticated;
 
 -- Limpia los datos efímeros de una sala terminada: la selección de preguntas
 -- (room_questions) y las respuestas individuales (answers) de sus
