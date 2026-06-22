@@ -156,6 +156,7 @@ create policy "participants_insert_if_room_open" on participants
   for insert
   with check (
     exists (select 1 from rooms where rooms.id = participants.room_id and rooms.status = 'open')
+    and (select count(*) from participants p where p.room_id = participants.room_id) < 200
   );
 
 -- El admin dueño de la sala puede expulsar participantes en el lobby (antes de
