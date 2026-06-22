@@ -38,6 +38,7 @@ function BrandText({ className = '' }) {
 }
 
 const READ_SECONDS = 3
+const MAX_PARTICIPANTS = 200
 const LETTERS = ['A', 'B', 'C', 'D']
 
 // Cada respuesta se identifica por letra + color + forma (icono). La forma evita
@@ -1695,7 +1696,7 @@ function AdminRoom({ room, setRoom, onExit }) {
                   <Users className="h-5 w-5 text-zinc-400" aria-hidden="true" />
                   <span className="text-2xl font-bold tabular-nums">{participants.length}</span>
                   <span className="text-sm text-zinc-500 dark:text-zinc-400">
-                    {participants.length === 1 ? 'participante' : 'participantes'}
+                    / {MAX_PARTICIPANTS} participantes
                   </span>
                 </div>
                 {participants.length > 0 && (
@@ -1948,6 +1949,11 @@ function ParticipantApp({ initialRoomCode, onHome }) {
       .single()
     if (rErr || !r) return setError('Sala no encontrada')
     if (r.status !== 'open') return setError('La sala ya no está abierta')
+    const { count } = await supabase
+      .from('participants')
+      .select('*', { count: 'exact', head: true })
+      .eq('room_id', r.id)
+    if (count >= MAX_PARTICIPANTS) return setError(`La sala está llena (máx. ${MAX_PARTICIPANTS})`)
     const { data: p, error: pErr } = await supabase
       .from('participants')
       .insert({ room_id: r.id, username: username.trim(), email: email.trim() || null, score: 0 })
