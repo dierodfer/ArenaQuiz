@@ -40,6 +40,11 @@ function BrandText({ className = '' }) {
 const READ_SECONDS = 3
 const MAX_PARTICIPANTS = 200
 const LETTERS = ['A', 'B', 'C', 'D']
+// Al pasar a resultados, ~150 participantes reaccionan a la vez y consultan su
+// estado final. Se difiere esa lectura con un retardo aleatorio en [0, este
+// valor) para repartir la ráfaga y no saturar la API (capa gratuita). El acierto
+// propio se muestra al instante (cache local); solo el % agregado espera.
+const RESULT_FETCH_JITTER_MS = 1500
 
 // Callback estable para hooks que reciben un handler opcional (p.ej. el timer
 // del participante no necesita reaccionar al fin del tiempo). Compartirlo evita
@@ -47,8 +52,8 @@ const LETTERS = ['A', 'B', 'C', 'D']
 const noop = () => {}
 
 // Deriva { total, correct, pct } a partir de los contadores agregados. Lo usan
-// tanto el admin (cuenta sobre liveAnswers) como el participante (RPC
-// get_question_stats): una sola fuente para el cálculo del porcentaje.
+// tanto el admin (cuenta sobre liveAnswers) como el participante (vía la RPC
+// get_my_result): una sola fuente para el cálculo del porcentaje.
 function statsFromCounts(total, correct) {
   return { total, correct, pct: total ? Math.round((correct / total) * 100) : 0 }
 }
@@ -349,25 +354,6 @@ function useCurrentQuestion(room) {
       .then(({ data }) => setQuestion(data?.[0] ?? null))
   }, [room?.id, room?.status, room?.current_question_index])
   return question
-}
-
-// % de acierto vía RPC: get_question_stats agrega answers sin exponer las
-// respuestas individuales (la tabla answers no es legible por participantes).
-function useQuestionStats(room, question) {
-  const [stats, setStats] = useState(null)
-  useEffect(() => {
-    if (room?.status !== 'showing_results' || !question) {
-      setStats(null)
-      return
-    }
-    supabase
-      .rpc('get_question_stats', { p_question_id: question.id })
-      .then(({ data }) => {
-        const row = data?.[0]
-        setStats(statsFromCounts(row?.total ?? 0, row?.correct ?? 0))
-      })
-  }, [room?.status, question?.id])
-  return stats
 }
 
 // Participantes de la sala para el admin: carga inicial + realtime de altas
@@ -1575,9 +1561,8 @@ function AdminRoom({ room, setRoom, onExit }) {
   const liveAnswers = useLiveAnswers(question, room.status)
 
   // El admin ya tiene todas las respuestas (con is_correct) vía useLiveAnswers,
-  // así que las stats se calculan en cliente en vez de llamar a
-  // get_question_stats (un RPC menos por pregunta). El participante sí usa el
-  // RPC porque RLS no le deja leer answers.
+  // así que las stats se calculan en cliente sin ninguna RPC extra. El
+  // participante las obtiene de get_my_result porque RLS no le deja leer answers.
   const stats = useMemo(
     () => statsFromCounts(liveAnswers.length, liveAnswers.filter((a) => a.is_correct).length),
     [liveAnswers],
@@ -2142,7 +2127,7 @@ function ParticipantApp({ initialRoomCode, onHome }) {
 
 function ParticipantRoom({ room, setRoom, participant, onHome }) {
   const question = useCurrentQuestion(room)
-  const stats = useQuestionStats(room, question)
+  const [stats, setStats] = useState(null) // { total, correct, pct }; se lee en resultados
   const [myAnswer, setMyAnswer] = useState(null) // { answer, is_correct? }; is_correct se lee en resultados
   const [score, setScore] = useState(participant.score)
   const { setRoomLogo } = useContext(RoomBrandingContext)
@@ -2167,9 +2152,10 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
     return () => setRoomLogo(null)
   }, [room.logo_image, setRoomLogo])
 
-  // Nueva pregunta → limpiar respuesta anterior
+  // Nueva pregunta → limpiar respuesta y stats anteriores
   useEffect(() => {
     setMyAnswer(null)
+    setStats(null)
     sentAnswerRef.current = null
     lastResultRef.current = null
   }, [room.current_question_index])
@@ -2214,9 +2200,12 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
   // Al pasar a resultados: aplicar de inmediato el último resultado conocido
   // (sin parpadeo) y luego reconciliar con el estado autoritativo del servidor
   // (a prueba de carreras si el último cambio iba en vuelo, y de reconexión).
-  // get_my_answer existe para esto (RLS no deja leer answers). Si las lecturas
-  // fallan por una reconexión inestable, se conserva el último resultado local
-  // en vez de mostrar "No respondiste" por error.
+  // Una sola RPC (get_my_result) devuelve respuesta + acierto + score + stats,
+  // en lugar de tres llamadas. Se difiere con un jitter aleatorio porque ~150
+  // clientes entran en resultados a la vez: así se reparte la ráfaga de
+  // peticiones. El acierto propio ya se mostró al instante vía lastResultRef;
+  // solo el % agregado espera al jitter. Si la lectura falla (reconexión
+  // inestable), se conserva el último estado conocido.
   useEffect(() => {
     if (room.status !== 'showing_results' || !question) return
     const last = lastResultRef.current
@@ -2224,19 +2213,21 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
       setMyAnswer((prev) => (prev ? { ...prev, is_correct: last.is_correct } : prev))
       if (last.new_score != null) setScore(last.new_score)
     }
-    supabase
-      .rpc('get_my_answer', { p_question_id: question.id, p_participant_id: participant.id })
-      .then(({ data, error }) => {
-        if (error) return // reconexión inestable: mantener el último estado conocido
-        const row = data?.[0]
-        setMyAnswer(row ? { answer: row.answer, is_correct: row.is_correct } : null)
-      })
-    supabase
-      .from('participants')
-      .select('score')
-      .eq('id', participant.id)
-      .single()
-      .then(({ data, error }) => { if (!error && data) setScore(data.score) })
+    let active = true
+    const qId = question.id
+    const t = setTimeout(() => {
+      supabase
+        .rpc('get_my_result', { p_question_id: qId, p_participant_id: participant.id })
+        .then(({ data, error }) => {
+          if (!active || error) return // reconexión inestable: mantener lo conocido
+          const row = data?.[0]
+          if (!row) return
+          setMyAnswer(row.answer ? { answer: row.answer, is_correct: row.is_correct } : null)
+          if (row.score != null) setScore(row.score)
+          setStats(statsFromCounts(row.total ?? 0, row.correct ?? 0))
+        })
+    }, Math.random() * RESULT_FETCH_JITTER_MS)
+    return () => { active = false; clearTimeout(t) }
   }, [room.status, question?.id])
 
   const disabled = phase !== 'answering' || timeLeft <= 0
