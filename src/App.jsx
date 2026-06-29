@@ -2096,6 +2096,10 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
   // doble envío funcione de forma síncrona: dos toques muy seguidos en la misma
   // casilla no esperan al re-render y no disparan dos veces la RPC.
   const sentAnswerRef = useRef(null)
+  // Último resultado conocido devuelto por submit_answer ({ is_correct, new_score }).
+  // Se aplica de inmediato al entrar en resultados (sin parpadeo) y sirve de
+  // respaldo si la lectura autoritativa falla por una reconexión inestable.
+  const lastResultRef = useRef(null)
 
   useRoomSubscription(room.id, setRoom)
 
@@ -2113,6 +2117,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
   useEffect(() => {
     setMyAnswer(null)
     sentAnswerRef.current = null
+    lastResultRef.current = null
   }, [room.current_question_index])
 
   const { phase, timeLeft } = useQuestionTimer(room, () => {})
@@ -2127,7 +2132,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
     if (sentAnswerRef.current === letter) return // misma opción ya enviada: no reenviar
     sentAnswerRef.current = letter // marca síncrona (evita doble envío en toques rápidos)
     setMyAnswer({ answer: letter }) // selección optimista (anillo)
-    const { error } = await supabase.rpc('submit_answer', {
+    const { data, error } = await supabase.rpc('submit_answer', {
       p_question_id: question.id,
       p_participant_id: participant.id,
       p_answer: letter,
@@ -2136,17 +2141,29 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
       // El envío falló: revertir la marca para permitir reintento tocando de nuevo.
       // No bloqueamos la UI ni mostramos error intrusivo durante la cuenta atrás.
       if (sentAnswerRef.current === letter) sentAnswerRef.current = null
+      return
     }
+    const result = data?.[0]
+    if (result) lastResultRef.current = result // guardado para aplicar en resultados (no en vivo)
   }
 
-  // Al pasar a resultados, leer el estado final autoritativo del servidor (a
-  // prueba de carreras si el último cambio aún estaba en vuelo) y aplicar el
-  // score real. get_my_answer existe para esto (RLS no deja leer answers).
+  // Al pasar a resultados: aplicar de inmediato el último resultado conocido
+  // (sin parpadeo) y luego reconciliar con el estado autoritativo del servidor
+  // (a prueba de carreras si el último cambio iba en vuelo, y de reconexión).
+  // get_my_answer existe para esto (RLS no deja leer answers). Si las lecturas
+  // fallan por una reconexión inestable, se conserva el último resultado local
+  // en vez de mostrar "No respondiste" por error.
   useEffect(() => {
     if (room.status !== 'showing_results' || !question) return
+    const last = lastResultRef.current
+    if (last) {
+      setMyAnswer((prev) => (prev ? { ...prev, is_correct: last.is_correct } : prev))
+      if (last.new_score != null) setScore(last.new_score)
+    }
     supabase
       .rpc('get_my_answer', { p_question_id: question.id, p_participant_id: participant.id })
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        if (error) return // reconexión inestable: mantener el último estado conocido
         const row = data?.[0]
         setMyAnswer(row ? { answer: row.answer, is_correct: row.is_correct } : null)
       })
@@ -2155,7 +2172,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
       .select('score')
       .eq('id', participant.id)
       .single()
-      .then(({ data }) => { if (data) setScore(data.score) })
+      .then(({ data, error }) => { if (!error && data) setScore(data.score) })
   }, [room.status, question?.id])
 
   const disabled = phase !== 'answering' || timeLeft <= 0
@@ -2263,22 +2280,27 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
                 transition={{ type: 'spring', stiffness: 300, damping: 18 }}
                 className="flex flex-col items-center gap-1.5"
               >
-                {myAnswer ? (
-                  myAnswer.is_correct ? (
-                    <>
-                      <CheckCircle2 className="h-12 w-12 text-emerald-500 sm:h-16 sm:w-16" aria-hidden="true" />
-                      <p className="text-xl font-bold text-emerald-600 sm:text-2xl dark:text-emerald-400">¡Correcto!</p>
-                    </>
-                  ) : (
-                    <>
-                      <XCircle className="h-12 w-12 text-rose-500 sm:h-16 sm:w-16" aria-hidden="true" />
-                      <p className="text-xl font-bold text-rose-600 sm:text-2xl dark:text-rose-400">Incorrecto</p>
-                    </>
-                  )
-                ) : (
+                {!myAnswer ? (
                   <>
                     <MinusCircle className="h-12 w-12 text-zinc-400 sm:h-16 sm:w-16" aria-hidden="true" />
                     <p className="text-lg font-semibold text-zinc-500 sm:text-xl dark:text-zinc-400">No respondiste</p>
+                  </>
+                ) : myAnswer.is_correct == null ? (
+                  // Respuesta marcada pero el acierto aún no se ha confirmado:
+                  // estado neutro para no parpadear un resultado equivocado.
+                  <>
+                    <Loader2 className="h-12 w-12 animate-spin text-zinc-400 sm:h-16 sm:w-16" aria-hidden="true" />
+                    <p className="text-lg font-semibold text-zinc-500 sm:text-xl dark:text-zinc-400">Comprobando…</p>
+                  </>
+                ) : myAnswer.is_correct ? (
+                  <>
+                    <CheckCircle2 className="h-12 w-12 text-emerald-500 sm:h-16 sm:w-16" aria-hidden="true" />
+                    <p className="text-xl font-bold text-emerald-600 sm:text-2xl dark:text-emerald-400">¡Correcto!</p>
+                  </>
+                ) : (
+                  <>
+                    <XCircle className="h-12 w-12 text-rose-500 sm:h-16 sm:w-16" aria-hidden="true" />
+                    <p className="text-xl font-bold text-rose-600 sm:text-2xl dark:text-rose-400">Incorrecto</p>
                   </>
                 )}
               </motion.div>
