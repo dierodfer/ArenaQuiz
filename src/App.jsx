@@ -2092,6 +2092,10 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
   const [myAnswer, setMyAnswer] = useState(null) // { answer, is_correct? }; is_correct se lee en resultados
   const [score, setScore] = useState(participant.score)
   const { setRoomLogo } = useContext(RoomBrandingContext)
+  // Última opción ya enviada. Es un ref (no estado) para que el guard contra
+  // doble envío funcione de forma síncrona: dos toques muy seguidos en la misma
+  // casilla no esperan al re-render y no disparan dos veces la RPC.
+  const sentAnswerRef = useRef(null)
 
   useRoomSubscription(room.id, setRoom)
 
@@ -2108,6 +2112,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
   // Nueva pregunta → limpiar respuesta anterior
   useEffect(() => {
     setMyAnswer(null)
+    sentAnswerRef.current = null
   }, [room.current_question_index])
 
   const { phase, timeLeft } = useQuestionTimer(room, () => {})
@@ -2119,7 +2124,8 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
   // revelar la respuesta correcta mientras aún se puede cambiar.
   const answer = async (letter) => {
     if (!question || phase !== 'answering' || timeLeft <= 0) return
-    if (myAnswer?.answer === letter) return // misma opción ya marcada
+    if (sentAnswerRef.current === letter) return // misma opción ya enviada: no reenviar
+    sentAnswerRef.current = letter // marca síncrona (evita doble envío en toques rápidos)
     setMyAnswer({ answer: letter }) // selección optimista (anillo)
     const { error } = await supabase.rpc('submit_answer', {
       p_question_id: question.id,
@@ -2127,8 +2133,9 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
       p_answer: letter,
     })
     if (error && error.code !== '23505') {
-      // El envío falló; el participante puede reintentar tocando otra opción.
+      // El envío falló: revertir la marca para permitir reintento tocando de nuevo.
       // No bloqueamos la UI ni mostramos error intrusivo durante la cuenta atrás.
+      if (sentAnswerRef.current === letter) sentAnswerRef.current = null
     }
   }
 
