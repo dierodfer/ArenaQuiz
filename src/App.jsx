@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, createContext, useContext } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback, createContext, useContext } from 'react'
 import { motion, MotionConfig } from 'framer-motion'
 import {
   Sun, Moon, Loader2, LogIn, Mail, Lock, Unlock, Plus, Library, LogOut,
@@ -40,6 +40,36 @@ function BrandText({ className = '' }) {
 const READ_SECONDS = 3
 const MAX_PARTICIPANTS = 200
 const LETTERS = ['A', 'B', 'C', 'D']
+
+// Callback estable para hooks que reciben un handler opcional (p.ej. el timer
+// del participante no necesita reaccionar al fin del tiempo). Compartirlo evita
+// crear una función nueva en cada render, que invalidaría las deps del efecto.
+const noop = () => {}
+
+// Deriva { total, correct, pct } a partir de los contadores agregados. Lo usan
+// tanto el admin (cuenta sobre liveAnswers) como el participante (RPC
+// get_question_stats): una sola fuente para el cálculo del porcentaje.
+function statsFromCounts(total, correct) {
+  return { total, correct, pct: total ? Math.round((correct / total) * 100) : 0 }
+}
+
+// Lista ordenada de categorías únicas del banco de preguntas.
+function uniqueCategories(questions) {
+  return [...new Set(questions.map((q) => q.category))].sort()
+}
+
+// Agrupa las preguntas por categoría (orden alfabético) para mostrarlas.
+function groupQuestionsByCategory(questions) {
+  return uniqueCategories(questions).map((category) => ({
+    category,
+    items: questions.filter((q) => q.category === category),
+  }))
+}
+
+// Valida el formulario de "Nueva pregunta": título, las 4 opciones y categoría.
+function isQuestionFormValid(title, options, category) {
+  return !!(title.trim() && options.every((o) => o.trim()) && category.trim())
+}
 
 // Cada respuesta se identifica por letra + color + forma (icono). La forma evita
 // depender solo del color (accesible para daltónicos) y mejora la lectura en
@@ -277,7 +307,7 @@ export function useQuestionTimer(room, onTimeUp) {
     }
     const t = setTimeout(() => setTimeLeft((s) => s - 1), 1000)
     return () => clearTimeout(t)
-  }, [phase, timeLeft, room?.status])
+  }, [phase, timeLeft, room?.status, onTimeUp])
 
   return { phase, timeLeft }
 }
@@ -334,9 +364,7 @@ function useQuestionStats(room, question) {
       .rpc('get_question_stats', { p_question_id: question.id })
       .then(({ data }) => {
         const row = data?.[0]
-        const total = row?.total ?? 0
-        const correct = row?.correct ?? 0
-        setStats({ total, correct, pct: total ? Math.round((correct / total) * 100) : 0 })
+        setStats(statsFromCounts(row?.total ?? 0, row?.correct ?? 0))
       })
   }, [room?.status, question?.id])
   return stats
@@ -727,7 +755,7 @@ function Ranking({ roomId, highlightId, finishMessage, finishImage }) {
   useEffect(() => {
     supabase
       .from('participants')
-      .select('*')
+      .select('id, username, score')
       .eq('room_id', roomId)
       .order('score', { ascending: false })
       .then(({ data }) => setRows(data ?? []))
@@ -969,8 +997,8 @@ function QuestionBank({ session, onBack }) {
       .then(({ data }) => setQuestions(data ?? []))
   }, [])
 
-  const categories = [...new Set(questions.map((q) => q.category))].sort()
-  const valid = title.trim() && options.every((o) => o.trim()) && category.trim()
+  const categories = uniqueCategories(questions)
+  const valid = isQuestionFormValid(title, options, category)
 
   const addQuestion = async () => {
     setError('')
@@ -1018,10 +1046,7 @@ function QuestionBank({ session, onBack }) {
   }
 
   // Agrupadas por categoría para mostrarlas.
-  const grouped = categories.map((cat) => ({
-    category: cat,
-    items: questions.filter((q) => q.category === cat),
-  }))
+  const grouped = groupQuestionsByCategory(questions)
 
   return (
     <Stage>
@@ -1292,7 +1317,7 @@ function CreateRoom({ session, setRoom, onBack }) {
       .then(({ data }) => setQuestions(data ?? []))
   }, [])
 
-  const categories = [...new Set(questions.map((q) => q.category))].sort()
+  const categories = uniqueCategories(questions)
   const inCategory = category ? questions.filter((q) => q.category === category) : []
 
   const selectCategory = (cat) => {
@@ -1553,11 +1578,16 @@ function AdminRoom({ room, setRoom, onExit }) {
   // así que las stats se calculan en cliente en vez de llamar a
   // get_question_stats (un RPC menos por pregunta). El participante sí usa el
   // RPC porque RLS no le deja leer answers.
-  const stats = useMemo(() => {
-    const total = liveAnswers.length
-    const correct = liveAnswers.filter((a) => a.is_correct).length
-    return { total, correct, pct: total ? Math.round((correct / total) * 100) : 0 }
-  }, [liveAnswers])
+  const stats = useMemo(
+    () => statsFromCounts(liveAnswers.length, liveAnswers.filter((a) => a.is_correct).length),
+    [liveAnswers],
+  )
+
+  // Guard de concurrencia para los cambios de estado de la sala. El ref es
+  // síncrono (bloquea dobles clics o spam antes del re-render); el estado
+  // deshabilita los botones mientras hay un UPDATE en vuelo.
+  const [updatingRoom, setUpdatingRoom] = useState(false)
+  const updatingRoomRef = useRef(false)
 
   useRoomSubscription(room.id, setRoom)
 
@@ -1584,16 +1614,31 @@ function AdminRoom({ room, setRoom, onExit }) {
       )
   }, [room.id])
 
-  const updateRoom = async (fields) => {
-    const { data, error } = await supabase
-      .from('rooms')
-      .update(fields)
-      .eq('id', room.id)
-      .select()
-      .single()
-    if (error) return alert(error.message)
-    setRoom(data)
-  }
+  // Devuelve true si el UPDATE tuvo éxito (lo usa finishSurvey para no limpiar
+  // la sala si la transición a 'finished' falló). Memoizado para que
+  // closeQuestion sea estable y no reinicie el efecto del timer en cada render.
+  const updateRoom = useCallback(
+    async (fields) => {
+      if (updatingRoomRef.current) return false
+      updatingRoomRef.current = true
+      setUpdatingRoom(true)
+      const { data, error } = await supabase
+        .from('rooms')
+        .update(fields)
+        .eq('id', room.id)
+        .select()
+        .single()
+      updatingRoomRef.current = false
+      setUpdatingRoom(false)
+      if (error) {
+        alert(error.message)
+        return false
+      }
+      setRoom(data)
+      return true
+    },
+    [room.id, setRoom],
+  )
 
   // El admin expulsa a un participante en el lobby (antes de empezar). El
   // DELETE se propaga por realtime; aun así actualizamos el estado local para
@@ -1606,7 +1651,7 @@ function AdminRoom({ room, setRoom, onExit }) {
 
   // Cierra la pregunta para todos, ya sea porque el timer llegó a 0 o porque
   // el admin la saltó manualmente.
-  const closeQuestion = () => updateRoom({ status: 'showing_results' })
+  const closeQuestion = useCallback(() => updateRoom({ status: 'showing_results' }), [updateRoom])
 
   // Timer del admin: cuando llega a 0 cierra la pregunta para todos
   const { phase, timeLeft } = useQuestionTimer(room, closeQuestion)
@@ -1616,7 +1661,11 @@ function AdminRoom({ room, setRoom, onExit }) {
   // rooms/participants para el ranking y questions, que vive en el banco del
   // admin.
   const finishSurvey = async () => {
-    await updateRoom({ status: 'finished' })
+    // Solo limpiar los datos efímeros si la sala pasó a 'finished'; si el UPDATE
+    // falló, no ejecutamos el cleanup (abortaría de todos modos y dejaría la UI
+    // en un estado incoherente).
+    const ok = await updateRoom({ status: 'finished' })
+    if (!ok) return
     const { error } = await supabase.rpc('cleanup_finished_room', { p_room_id: room.id })
     if (error) alert(error.message)
   }
@@ -1682,7 +1731,7 @@ function AdminRoom({ room, setRoom, onExit }) {
                   ))}
                 </ol>
                 <div className="mx-auto max-w-sm">
-                  <button className="btn" onClick={() => updateRoom({ status: 'open' })}>
+                  <button className="btn" disabled={updatingRoom} onClick={() => updateRoom({ status: 'open' })}>
                     <Unlock className="h-4 w-4" aria-hidden="true" />
                     Abrir sala
                   </button>
@@ -1752,7 +1801,7 @@ function AdminRoom({ room, setRoom, onExit }) {
                 <div className="mx-auto max-w-sm">
                   <button
                     className="btn"
-                    disabled={questions.length === 0}
+                    disabled={questions.length === 0 || updatingRoom}
                     onClick={() => updateRoom({ status: 'closed' })}
                   >
                     <Lock className="h-4 w-4" aria-hidden="true" />
@@ -1778,7 +1827,7 @@ function AdminRoom({ room, setRoom, onExit }) {
                 <div className="mx-auto max-w-sm">
                   <button
                     className="btn"
-                    disabled={questions.length === 0}
+                    disabled={questions.length === 0 || updatingRoom}
                     onClick={() => updateRoom({ current_question_index: 0, status: 'in_question' })}
                   >
                     <Play className="h-4 w-4" aria-hidden="true" />
@@ -1827,11 +1876,11 @@ function AdminRoom({ room, setRoom, onExit }) {
                   <p className="text-xs text-zinc-400">El desglose se mostrará al agotarse el tiempo.</p>
                 </div>
                 <div className="mx-auto flex max-w-sm flex-col gap-2">
-                  <button className="btn-secondary" onClick={closeQuestion}>
+                  <button className="btn-secondary" disabled={updatingRoom} onClick={closeQuestion}>
                     <SkipForward className="h-4 w-4" aria-hidden="true" />
                     Saltar pregunta
                   </button>
-                  <button className="btn-ghost justify-center" onClick={skipSurvey}>
+                  <button className="btn-ghost justify-center" disabled={updatingRoom} onClick={skipSurvey}>
                     <Trophy className="h-4 w-4" aria-hidden="true" />
                     Finalizar encuesta
                   </button>
@@ -1867,7 +1916,7 @@ function AdminRoom({ room, setRoom, onExit }) {
                 </div>
                 <AnswerBreakdown question={question} answers={liveAnswers} showCorrect={true} totalParticipants={participants.length} />
                 <div className="mx-auto flex max-w-sm flex-col gap-2">
-                  <button className="btn" onClick={nextQuestion}>
+                  <button className="btn" disabled={updatingRoom} onClick={nextQuestion}>
                     {room.current_question_index + 1 < questions.length ? (
                       <>
                         <ChevronRight className="h-4 w-4" aria-hidden="true" />
@@ -1881,7 +1930,7 @@ function AdminRoom({ room, setRoom, onExit }) {
                     )}
                   </button>
                   {room.current_question_index + 1 < questions.length && (
-                    <button className="btn-ghost justify-center" onClick={skipSurvey}>
+                    <button className="btn-ghost justify-center" disabled={updatingRoom} onClick={skipSurvey}>
                       <Trophy className="h-4 w-4" aria-hidden="true" />
                       Finalizar encuesta
                     </button>
@@ -1950,10 +1999,13 @@ function ParticipantApp({ initialRoomCode, onHome }) {
       .single()
     if (rErr || !r) return setError('Sala no encontrada')
     if (r.status !== 'open') return setError('La sala ya no está abierta')
-    const { count } = await supabase
+    const { count, error: countErr } = await supabase
       .from('participants')
       .select('*', { count: 'exact', head: true })
       .eq('room_id', r.id)
+    // Si la query falla o no devuelve count, no asumimos que hay sitio: una
+    // comparación contra null daría false y dejaría entrar con la sala llena.
+    if (countErr || count == null) return setError('No se pudo comprobar el aforo. Inténtalo de nuevo.')
     if (count >= MAX_PARTICIPANTS) return setError(`La sala está llena (máx. ${MAX_PARTICIPANTS})`)
     const { data: p, error: pErr } = await supabase
       .from('participants')
@@ -2122,7 +2174,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
     lastResultRef.current = null
   }, [room.current_question_index])
 
-  const { phase, timeLeft } = useQuestionTimer(room, () => {})
+  const { phase, timeLeft } = useQuestionTimer(room, noop)
 
   // Marca o cambia la respuesta. Se sube a Supabase en cada cambio:
   // submit_answer hace INSERT la primera vez (el admin la ve en vivo) y UPDATE
@@ -2132,21 +2184,31 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
   const answer = async (letter) => {
     if (!question || phase !== 'answering' || timeLeft <= 0) return
     if (sentAnswerRef.current === letter) return // misma opción ya enviada: no reenviar
+    const questionId = question.id // capturar: la pregunta podría cambiar durante el await
     sentAnswerRef.current = letter // marca síncrona (evita doble envío en toques rápidos)
     setMyAnswer({ answer: letter }) // selección optimista (anillo)
-    const { data, error } = await supabase.rpc('submit_answer', {
-      p_question_id: question.id,
-      p_participant_id: participant.id,
-      p_answer: letter,
-    })
-    if (error && error.code !== '23505') {
-      // El envío falló: revertir la marca para permitir reintento tocando de nuevo.
-      // No bloqueamos la UI ni mostramos error intrusivo durante la cuenta atrás.
+    try {
+      const { data, error } = await supabase.rpc('submit_answer', {
+        p_question_id: questionId,
+        p_participant_id: participant.id,
+        p_answer: letter,
+      })
+      if (error && error.code !== '23505') {
+        // El envío falló: revertir la marca para permitir reintento tocando de nuevo.
+        // No bloqueamos la UI ni mostramos error intrusivo durante la cuenta atrás.
+        if (sentAnswerRef.current === letter) sentAnswerRef.current = null
+        return
+      }
+      // Si entretanto cambió la opción seleccionada o la pregunta (sentAnswerRef
+      // se reinicia a null al cambiar de pregunta), descartar este resultado para
+      // no guardar estado obsoleto en lastResultRef.
+      if (sentAnswerRef.current !== letter) return
+      const result = data?.[0]
+      if (result) lastResultRef.current = result // guardado para aplicar en resultados (no en vivo)
+    } catch {
+      // Error de red u otro fallo inesperado: permitir reintento.
       if (sentAnswerRef.current === letter) sentAnswerRef.current = null
-      return
     }
-    const result = data?.[0]
-    if (result) lastResultRef.current = result // guardado para aplicar en resultados (no en vivo)
   }
 
   // Al pasar a resultados: aplicar de inmediato el último resultado conocido
