@@ -2091,9 +2091,17 @@ function ParticipantApp({ initialRoomCode, onHome }) {
 function ParticipantRoom({ room, setRoom, participant, onHome }) {
   const question = useCurrentQuestion(room)
   const stats = useQuestionStats(room, question)
-  const [myAnswer, setMyAnswer] = useState(null)
+  const [myAnswer, setMyAnswer] = useState(null) // { answer, is_correct? }; is_correct se lee en resultados
   const [score, setScore] = useState(participant.score)
   const { setRoomLogo } = useContext(RoomBrandingContext)
+  // Última opción ya enviada. Es un ref (no estado) para que el guard contra
+  // doble envío funcione de forma síncrona: dos toques muy seguidos en la misma
+  // casilla no esperan al re-render y no disparan dos veces la RPC.
+  const sentAnswerRef = useRef(null)
+  // Último resultado conocido devuelto por submit_answer ({ is_correct, new_score }).
+  // Se aplica de inmediato al entrar en resultados (sin parpadeo) y sirve de
+  // respaldo si la lectura autoritativa falla por una reconexión inestable.
+  const lastResultRef = useRef(null)
 
   useRoomSubscription(room.id, setRoom)
 
@@ -2110,29 +2118,66 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
   // Nueva pregunta → limpiar respuesta anterior
   useEffect(() => {
     setMyAnswer(null)
+    sentAnswerRef.current = null
+    lastResultRef.current = null
   }, [room.current_question_index])
 
-  // El participante no cierra la pregunta: cuando su timer llega a 0 solo
-  // espera el evento showing_results que dispara el admin.
   const { phase, timeLeft } = useQuestionTimer(room, () => {})
 
+  // Marca o cambia la respuesta. Se sube a Supabase en cada cambio:
+  // submit_answer hace INSERT la primera vez (el admin la ve en vivo) y UPDATE
+  // en los siguientes mientras la sala siga in_question. El score y la
+  // corrección NO se aplican aquí (se leen al pasar a resultados) para no
+  // revelar la respuesta correcta mientras aún se puede cambiar.
   const answer = async (letter) => {
-    if (myAnswer || !question) return
+    if (!question || phase !== 'answering' || timeLeft <= 0) return
+    if (sentAnswerRef.current === letter) return // misma opción ya enviada: no reenviar
+    sentAnswerRef.current = letter // marca síncrona (evita doble envío en toques rápidos)
+    setMyAnswer({ answer: letter }) // selección optimista (anillo)
     const { data, error } = await supabase.rpc('submit_answer', {
       p_question_id: question.id,
       p_participant_id: participant.id,
       p_answer: letter,
     })
-    if (error) {
-      if (error.code === '23505') return // duplicate — already answered
-      return alert(error.message)
+    if (error && error.code !== '23505') {
+      // El envío falló: revertir la marca para permitir reintento tocando de nuevo.
+      // No bloqueamos la UI ni mostramos error intrusivo durante la cuenta atrás.
+      if (sentAnswerRef.current === letter) sentAnswerRef.current = null
+      return
     }
     const result = data?.[0]
-    setMyAnswer({ answer: letter, is_correct: result?.is_correct ?? false })
-    if (result) setScore(result.new_score)
+    if (result) lastResultRef.current = result // guardado para aplicar en resultados (no en vivo)
   }
 
-  const disabled = phase !== 'answering' || timeLeft <= 0 || !!myAnswer
+  // Al pasar a resultados: aplicar de inmediato el último resultado conocido
+  // (sin parpadeo) y luego reconciliar con el estado autoritativo del servidor
+  // (a prueba de carreras si el último cambio iba en vuelo, y de reconexión).
+  // get_my_answer existe para esto (RLS no deja leer answers). Si las lecturas
+  // fallan por una reconexión inestable, se conserva el último resultado local
+  // en vez de mostrar "No respondiste" por error.
+  useEffect(() => {
+    if (room.status !== 'showing_results' || !question) return
+    const last = lastResultRef.current
+    if (last) {
+      setMyAnswer((prev) => (prev ? { ...prev, is_correct: last.is_correct } : prev))
+      if (last.new_score != null) setScore(last.new_score)
+    }
+    supabase
+      .rpc('get_my_answer', { p_question_id: question.id, p_participant_id: participant.id })
+      .then(({ data, error }) => {
+        if (error) return // reconexión inestable: mantener el último estado conocido
+        const row = data?.[0]
+        setMyAnswer(row ? { answer: row.answer, is_correct: row.is_correct } : null)
+      })
+    supabase
+      .from('participants')
+      .select('score')
+      .eq('id', participant.id)
+      .single()
+      .then(({ data, error }) => { if (!error && data) setScore(data.score) })
+  }, [room.status, question?.id])
+
+  const disabled = phase !== 'answering' || timeLeft <= 0
 
   return (
     <Stage medium>
@@ -2220,7 +2265,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
               {myAnswer && (
                 <p role="status" className="flex items-center justify-center gap-1.5 text-center text-sm font-medium text-zinc-500 dark:text-zinc-400">
                   <Check className="h-4 w-4 text-emerald-500" aria-hidden="true" />
-                  Respuesta enviada
+                  Puedes cambiar tu respuesta hasta que acabe el tiempo
                 </p>
               )}
             </div>
@@ -2237,22 +2282,27 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
                 transition={{ type: 'spring', stiffness: 300, damping: 18 }}
                 className="flex flex-col items-center gap-1.5"
               >
-                {myAnswer ? (
-                  myAnswer.is_correct ? (
-                    <>
-                      <CheckCircle2 className="h-12 w-12 text-emerald-500 sm:h-16 sm:w-16" aria-hidden="true" />
-                      <p className="text-xl font-bold text-emerald-600 sm:text-2xl dark:text-emerald-400">¡Correcto!</p>
-                    </>
-                  ) : (
-                    <>
-                      <XCircle className="h-12 w-12 text-rose-500 sm:h-16 sm:w-16" aria-hidden="true" />
-                      <p className="text-xl font-bold text-rose-600 sm:text-2xl dark:text-rose-400">Incorrecto</p>
-                    </>
-                  )
-                ) : (
+                {!myAnswer ? (
                   <>
                     <MinusCircle className="h-12 w-12 text-zinc-400 sm:h-16 sm:w-16" aria-hidden="true" />
                     <p className="text-lg font-semibold text-zinc-500 sm:text-xl dark:text-zinc-400">No respondiste</p>
+                  </>
+                ) : myAnswer.is_correct == null ? (
+                  // Respuesta marcada pero el acierto aún no se ha confirmado:
+                  // estado neutro para no parpadear un resultado equivocado.
+                  <>
+                    <Loader2 className="h-12 w-12 animate-spin text-zinc-400 sm:h-16 sm:w-16" aria-hidden="true" />
+                    <p className="text-lg font-semibold text-zinc-500 sm:text-xl dark:text-zinc-400">Comprobando…</p>
+                  </>
+                ) : myAnswer.is_correct ? (
+                  <>
+                    <CheckCircle2 className="h-12 w-12 text-emerald-500 sm:h-16 sm:w-16" aria-hidden="true" />
+                    <p className="text-xl font-bold text-emerald-600 sm:text-2xl dark:text-emerald-400">¡Correcto!</p>
+                  </>
+                ) : (
+                  <>
+                    <XCircle className="h-12 w-12 text-rose-500 sm:h-16 sm:w-16" aria-hidden="true" />
+                    <p className="text-xl font-bold text-rose-600 sm:text-2xl dark:text-rose-400">Incorrecto</p>
                   </>
                 )}
               </motion.div>

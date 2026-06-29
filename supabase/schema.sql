@@ -261,10 +261,18 @@ $$;
 
 grant execute on function get_question_stats(uuid) to anon, authenticated;
 
--- Registra la respuesta de un participante: el servidor decide si es
--- correcta y actualiza el score de forma atómica. El cliente nunca calcula
--- is_correct ni el nuevo score. Idempotente: si ya existe la respuesta
--- (reconexión / doble clic) devuelve los datos almacenados sin error.
+-- Registra (o actualiza) la respuesta de un participante: el servidor decide
+-- si es correcta y ajusta el score de forma atómica. El cliente nunca calcula
+-- is_correct ni el nuevo score.
+--   · Primera respuesta → INSERT + score.
+--   · Ya existe y la sala sigue en 'in_question' → permite CAMBIAR la opción:
+--     actualiza la fila, recalcula is_correct y ajusta el score por el delta
+--     (+100 si la nueva acierta, -100 si la anterior acertaba). Esto deja que
+--     el participante cambie de respuesta mientras corre el tiempo y que el
+--     admin siga viendo la respuesta en vivo (el INSERT inicial dispara su
+--     contador; los cambios son UPDATE, que no lo inflan).
+--   · Ya existe pero la sala NO está in_question (resultados), o se reenvía la
+--     misma opción → idempotente: devuelve lo almacenado sin tocar el score.
 create or replace function submit_answer(p_question_id uuid, p_participant_id uuid, p_answer text)
 returns table (is_correct boolean, new_score int)
 language plpgsql
@@ -275,24 +283,43 @@ declare
   v_correct text;
   v_is_correct boolean;
   v_new_score int;
+  v_status text;
   v_existing record;
 begin
-  -- Si ya existe una respuesta para esta pregunta/participante, devolver la existente
-  select a.is_correct, p.score into v_existing
-    from answers a join participants p on p.id = a.participant_id
-    where a.question_id = p_question_id and a.participant_id = p_participant_id;
-  if found then
-    return query select v_existing.is_correct, v_existing.score;
-    return;
-  end if;
-
   select correct_answer into v_correct from questions where id = p_question_id;
   if v_correct is null then
     raise exception 'question not found';
   end if;
-
   v_is_correct := (p_answer = v_correct);
 
+  -- Estado de la sala del participante: gobierna si se puede cambiar la respuesta.
+  select r.status into v_status
+    from participants p join rooms r on r.id = p.room_id
+    where p.id = p_participant_id;
+
+  select a.id, a.answer, a.is_correct into v_existing
+    from answers a
+    where a.question_id = p_question_id and a.participant_id = p_participant_id;
+
+  if found then
+    -- Solo se puede cambiar mientras la sala siga in_question y sea otra opción.
+    if v_status is distinct from 'in_question' or v_existing.answer = p_answer then
+      select score into v_new_score from participants where id = p_participant_id;
+      return query select v_existing.is_correct, v_new_score;
+      return;
+    end if;
+    update answers set answer = p_answer, is_correct = v_is_correct where id = v_existing.id;
+    update participants
+      set score = score
+        + (case when v_is_correct then 100 else 0 end)
+        - (case when v_existing.is_correct then 100 else 0 end)
+      where id = p_participant_id
+      returning score into v_new_score;
+    return query select v_is_correct, v_new_score;
+    return;
+  end if;
+
+  -- Primera respuesta (sin guard de status: no perder respuestas de último momento).
   insert into answers (question_id, participant_id, answer, is_correct)
   values (p_question_id, p_participant_id, p_answer, v_is_correct);
 
