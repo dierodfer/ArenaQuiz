@@ -2089,9 +2089,14 @@ function ParticipantApp({ initialRoomCode, onHome }) {
 function ParticipantRoom({ room, setRoom, participant, onHome }) {
   const question = useCurrentQuestion(room)
   const stats = useQuestionStats(room, question)
-  const [myAnswer, setMyAnswer] = useState(null)
+  const [myAnswer, setMyAnswer] = useState(null) // selección local; is_correct llega al enviar
   const [score, setScore] = useState(participant.score)
   const { setRoomLogo } = useContext(RoomBrandingContext)
+  // La respuesta se mantiene en el cliente y solo se sube a Supabase una vez,
+  // en el último momento (timer a 0 o paso a showing_results), para no hacer
+  // una llamada por cada cambio de opción.
+  const submittedRef = useRef(false) // ya se envió la respuesta de esta pregunta
+  const selectedRef = useRef(null) // letra seleccionada actual
 
   useRoomSubscription(room.id, setRoom)
 
@@ -2108,29 +2113,50 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
   // Nueva pregunta → limpiar respuesta anterior
   useEffect(() => {
     setMyAnswer(null)
+    submittedRef.current = false
+    selectedRef.current = null
   }, [room.current_question_index])
 
-  // El participante no cierra la pregunta: cuando su timer llega a 0 solo
-  // espera el evento showing_results que dispara el admin.
-  const { phase, timeLeft } = useQuestionTimer(room, () => {})
-
-  const answer = async (letter) => {
-    if (myAnswer || !question) return
+  // Sube la respuesta seleccionada una sola vez. Idempotente: si ya se envió o
+  // no hay selección, no hace nada. Solo se invoca al acabar el tiempo (o al
+  // pasar a resultados), cuando ya no se puede cambiar, así que aplicar el
+  // score y la corrección aquí no revela nada en vivo.
+  const submitFinal = async () => {
+    if (submittedRef.current || !selectedRef.current || !question) return
+    submittedRef.current = true
+    const letter = selectedRef.current
     const { data, error } = await supabase.rpc('submit_answer', {
       p_question_id: question.id,
       p_participant_id: participant.id,
       p_answer: letter,
     })
     if (error) {
-      if (error.code === '23505') return // duplicate — already answered
-      return alert(error.message)
+      if (error.code !== '23505') submittedRef.current = false // permitir reintento salvo duplicado
+      return
     }
     const result = data?.[0]
     setMyAnswer({ answer: letter, is_correct: result?.is_correct ?? false })
     if (result) setScore(result.new_score)
   }
 
-  const disabled = phase !== 'answering' || timeLeft <= 0 || !!myAnswer
+  // El timer del participante a 0 dispara el envío de la respuesta final.
+  const { phase, timeLeft } = useQuestionTimer(room, submitFinal)
+
+  // Red de seguridad: si el reloj local no llegó a 0 o el admin cerró antes,
+  // asegura el envío al pasar a resultados.
+  useEffect(() => {
+    if (room.status === 'showing_results') submitFinal()
+  }, [room.status, question?.id])
+
+  // Selección local: el participante puede cambiarla libremente mientras corre
+  // el timer. No llama a Supabase (eso ocurre una sola vez, al final).
+  const select = (letter) => {
+    if (phase !== 'answering' || timeLeft <= 0 || submittedRef.current) return
+    selectedRef.current = letter
+    setMyAnswer({ answer: letter })
+  }
+
+  const disabled = phase !== 'answering' || timeLeft <= 0 || submittedRef.current
 
   return (
     <Stage medium>
@@ -2197,7 +2223,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
                       variants={listItem}
                       whileTap={disabled ? undefined : { scale: 0.97 }}
                       disabled={disabled}
-                      onClick={() => answer(l)}
+                      onClick={() => select(l)}
                       aria-label={`Opción ${l}: ${opt}`}
                       className={`relative flex min-h-[4rem] items-center gap-2.5 rounded-2xl px-3.5 py-2.5 text-left text-white shadow-sm transition sm:min-h-[4.5rem] sm:gap-3 sm:px-4 sm:py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-50 ${solid} ${disabled ? '' : hover} ${
                         selected ? 'ring-4 ring-white ring-offset-2 ring-offset-zinc-50 dark:ring-offset-zinc-950' : ''
@@ -2218,7 +2244,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
               {myAnswer && (
                 <p role="status" className="flex items-center justify-center gap-1.5 text-center text-sm font-medium text-zinc-500 dark:text-zinc-400">
                   <Check className="h-4 w-4 text-emerald-500" aria-hidden="true" />
-                  Respuesta enviada
+                  Puedes cambiar tu respuesta hasta que acabe el tiempo
                 </p>
               )}
             </div>
