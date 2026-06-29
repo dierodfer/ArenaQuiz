@@ -736,7 +736,7 @@ function Ranking({ roomId, highlightId, finishMessage, finishImage }) {
   // Solo animamos el podio (≤3 elementos); el resto se renderiza como lista
   // plana para no lanzar cientos de animaciones con muchos participantes.
   const top = rows.slice(0, 3)
-  const rest = rows.slice(3)
+  const rest = rows.slice(3, 10)
 
   return (
     <div className="space-y-6">
