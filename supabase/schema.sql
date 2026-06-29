@@ -16,6 +16,8 @@ drop table if exists answers, room_questions, questions, participants, rooms cas
 
 drop function if exists get_current_question(text);
 drop function if exists get_question_stats(uuid);
+drop function if exists get_my_answer(uuid, uuid);
+drop function if exists get_my_result(uuid, uuid);
 drop function if exists submit_answer(uuid, uuid, text);
 drop function if exists cleanup_finished_room(text);
 drop function if exists valid_question_options(jsonb);
@@ -265,21 +267,6 @@ $$;
 
 grant execute on function get_current_question(text) to anon, authenticated;
 
--- % de acierto de una pregunta, sin exponer las respuestas individuales.
-create or replace function get_question_stats(p_question_id uuid)
-returns table (total int, correct int)
-language sql
-security definer
-set search_path = public
-stable
-as $$
-  select count(*)::int as total, count(*) filter (where is_correct)::int as correct
-  from answers
-  where question_id = p_question_id;
-$$;
-
-grant execute on function get_question_stats(uuid) to anon, authenticated;
-
 -- Registra (o actualiza) la respuesta de un participante: el servidor decide
 -- si es correcta y ajusta el score de forma atómica. El cliente nunca calcula
 -- is_correct ni el nuevo score.
@@ -356,20 +343,33 @@ $$;
 
 grant execute on function submit_answer(uuid, uuid, text) to anon, authenticated;
 
--- Devuelve la respuesta de un participante a una pregunta concreta (si existe).
--- Usado por el cliente para restaurar el estado tras una reconexión a mitad de
--- pregunta, ya que RLS no le permite leer la tabla answers directamente.
-create or replace function get_my_answer(p_question_id uuid, p_participant_id uuid)
-returns table (answer text, is_correct boolean)
+-- Estado final del participante para una pregunta, en una sola llamada: su
+-- respuesta (o null si no respondió), si acertó, su score actualizado y los
+-- agregados de la pregunta (total de respuestas y aciertos). Sustituye a las
+-- antiguas get_my_answer + get_question_stats + un select de score: el
+-- participante hacía 3 llamadas al entrar en resultados y ahora hace 1, lo que
+-- reduce a un tercio la ráfaga de peticiones cuando ~150 clientes reaccionan a
+-- la vez a showing_results. RLS no deja al participante leer answers, de ahí el
+-- security definer. Devuelve siempre una fila (el participante existe).
+create or replace function get_my_result(p_question_id uuid, p_participant_id uuid)
+returns table (answer text, is_correct boolean, score int, total int, correct int)
 language sql
 security definer
 set search_path = public
+stable
 as $$
-  select answer, is_correct from answers
-  where question_id = p_question_id and participant_id = p_participant_id;
+  select
+    a.answer,
+    a.is_correct,
+    p.score,
+    (select count(*)::int from answers where question_id = p_question_id),
+    (select count(*)::int from answers where question_id = p_question_id and is_correct)
+  from participants p
+  left join answers a on a.participant_id = p.id and a.question_id = p_question_id
+  where p.id = p_participant_id;
 $$;
 
-grant execute on function get_my_answer(uuid, uuid) to anon, authenticated;
+grant execute on function get_my_result(uuid, uuid) to anon, authenticated;
 
 -- Limpia los datos efímeros de una sala terminada: la selección de preguntas
 -- (room_questions) y las respuestas individuales (answers) de sus
