@@ -267,7 +267,7 @@ grant execute on function get_question_stats(uuid) to anon, authenticated;
 --   · Primera respuesta → INSERT + score.
 --   · Ya existe y la sala sigue en 'in_question' → permite CAMBIAR la opción:
 --     actualiza la fila, recalcula is_correct y ajusta el score por el delta
---     (+100 si la nueva acierta, -100 si la anterior acertaba). Esto deja que
+--     (+1 si la nueva acierta, -1 si la anterior acertaba). Esto deja que
 --     el participante cambie de respuesta mientras corre el tiempo y que el
 --     admin siga viendo la respuesta en vivo (el INSERT inicial dispara su
 --     contador; los cambios son UPDATE, que no lo inflan).
@@ -311,8 +311,8 @@ begin
     update answers set answer = p_answer, is_correct = v_is_correct where id = v_existing.id;
     update participants
       set score = score
-        + (case when v_is_correct then 100 else 0 end)
-        - (case when v_existing.is_correct then 100 else 0 end)
+        + (case when v_is_correct then 1 else 0 end)
+        - (case when v_existing.is_correct then 1 else 0 end)
       where id = p_participant_id
       returning score into v_new_score;
     return query select v_is_correct, v_new_score;
@@ -324,7 +324,7 @@ begin
   values (p_question_id, p_participant_id, p_answer, v_is_correct);
 
   if v_is_correct then
-    update participants set score = score + 100
+    update participants set score = score + 1
       where id = p_participant_id
       returning score into v_new_score;
   else
