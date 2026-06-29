@@ -776,7 +776,7 @@ function Ranking({ roomId, highlightId, finishMessage, finishImage }) {
 
 // ---------- ADMIN ----------
 
-function AdminApp({ initialRoomCode }) {
+function AdminApp({ initialRoomCode, onBack }) {
   const [session, setSession] = useState(undefined) // undefined = cargando, null = sin sesión
   const [room, setRoom] = useState(null)
   const [view, setView] = useState('menu') // menu | create | bank
@@ -806,7 +806,7 @@ function AdminApp({ initialRoomCode }) {
     )
   }
 
-  if (!session) return <AdminAuth />
+  if (!session) return <AdminAuth onBack={onBack} />
   if (room) return <AdminRoom room={room} setRoom={setRoom} onExit={() => { clearRoomHash(); setRoom(null); setView('menu') }} />
   if (view === 'create') {
     return <CreateRoom session={session} setRoom={setRoom} onBack={() => setView('menu')} />
@@ -815,7 +815,7 @@ function AdminApp({ initialRoomCode }) {
   return <AdminMenu session={session} onCreate={() => setView('create')} onBank={() => setView('bank')} />
 }
 
-function AdminAuth() {
+function AdminAuth({ onBack }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [message, setMessage] = useState('')
@@ -830,7 +830,8 @@ function AdminAuth() {
 
   return (
     <Stage>
-      <motion.div initial={enter.initial} animate={enter.animate} transition={enterTransition}>
+      <motion.div initial={enter.initial} animate={enter.animate} transition={enterTransition} className="space-y-4">
+        {onBack && <BackButton onClick={onBack} />}
         <Panel className="space-y-6 p-6 sm:p-8">
           <ScreenHeader icon={Lock} title="Iniciar sesión" subtitle="Acceso de administrador" />
           <form
@@ -1971,7 +1972,8 @@ function ParticipantApp({ initialRoomCode, onHome }) {
 
   return (
     <Stage>
-      <motion.div initial={enter.initial} animate={enter.animate} transition={enterTransition}>
+      <motion.div initial={enter.initial} animate={enter.animate} transition={enterTransition} className="space-y-4">
+        {onHome && <BackButton onClick={onHome} />}
         <Panel className="space-y-6 p-6 sm:p-8">
           <ScreenHeader icon={Users} title="Unirse a una sala" subtitle={initialRoomCode ? `Sala: ${initialRoomCode}` : 'Elige tu nombre y una sala abierta'} />
           <form
@@ -2356,7 +2358,7 @@ export default function App() {
           <Header theme={theme} setTheme={setTheme} roomLogo={roomLogo} />
           <main className="px-4 py-8 sm:py-12">
             {role === 'admin' ? (
-              <AdminApp initialRoomCode={initialHash} />
+              <AdminApp initialRoomCode={initialHash} onBack={handleHome} />
             ) : role === 'participant' ? (
               <ParticipantApp initialRoomCode={initialHash} onHome={handleHome} />
             ) : (
