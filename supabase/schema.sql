@@ -18,6 +18,7 @@ drop function if exists get_current_question(text);
 drop function if exists get_question_stats(uuid);
 drop function if exists submit_answer(uuid, uuid, text);
 drop function if exists cleanup_finished_room(text);
+drop function if exists valid_question_options(jsonb);
 
 -- ============================================================
 -- Tablas
@@ -54,6 +55,23 @@ create table participants (
 -- table scan que empeora a medida que se acumulan sesiones.
 create index participants_room_id_idx on participants (room_id);
 
+-- Valida la forma de options: array JSON de 2 a 4 textos no vacíos. Se usa en
+-- el CHECK de questions.options como red de seguridad en servidor (el cliente
+-- ya valida, pero un INSERT manual o malformado no debe romper la UI, que itera
+-- sobre options). IMMUTABLE para poder referenciarla desde un CHECK.
+create or replace function valid_question_options(opts jsonb)
+returns boolean
+language sql
+immutable
+as $$
+  select jsonb_typeof(opts) = 'array'
+    and jsonb_array_length(opts) between 2 and 4
+    and not exists (
+      select 1 from jsonb_array_elements(opts) as e
+      where jsonb_typeof(e) <> 'string' or length(trim(e #>> '{}')) = 0
+    );
+$$;
+
 -- questions: banco de preguntas del admin, independiente de las salas.
 -- Una pregunta se crea una vez y puede reutilizarse en cualquier sala propia
 -- a través de room_questions.
@@ -63,7 +81,8 @@ create table questions (
   category text not null default 'General',
   title text not null,
   correct_answer text not null check (correct_answer in ('A', 'B', 'C', 'D')),
-  options jsonb not null, -- ["texto A", "texto B", "texto C", "texto D"]
+  -- ["texto A", "texto B", "texto C", "texto D"] (entre 2 y 4 textos no vacíos)
+  options jsonb not null check (valid_question_options(options)),
   created_at timestamptz not null default now()
 );
 
