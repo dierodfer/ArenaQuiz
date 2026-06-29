@@ -2089,14 +2089,9 @@ function ParticipantApp({ initialRoomCode, onHome }) {
 function ParticipantRoom({ room, setRoom, participant, onHome }) {
   const question = useCurrentQuestion(room)
   const stats = useQuestionStats(room, question)
-  const [myAnswer, setMyAnswer] = useState(null) // selección local; is_correct llega al enviar
+  const [myAnswer, setMyAnswer] = useState(null) // { answer, is_correct? }; is_correct se lee en resultados
   const [score, setScore] = useState(participant.score)
   const { setRoomLogo } = useContext(RoomBrandingContext)
-  // La respuesta se mantiene en el cliente y solo se sube a Supabase una vez,
-  // en el último momento (timer a 0 o paso a showing_results), para no hacer
-  // una llamada por cada cambio de opción.
-  const submittedRef = useRef(false) // ya se envió la respuesta de esta pregunta
-  const selectedRef = useRef(null) // letra seleccionada actual
 
   useRoomSubscription(room.id, setRoom)
 
@@ -2113,50 +2108,50 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
   // Nueva pregunta → limpiar respuesta anterior
   useEffect(() => {
     setMyAnswer(null)
-    submittedRef.current = false
-    selectedRef.current = null
   }, [room.current_question_index])
 
-  // Sube la respuesta seleccionada una sola vez. Idempotente: si ya se envió o
-  // no hay selección, no hace nada. Solo se invoca al acabar el tiempo (o al
-  // pasar a resultados), cuando ya no se puede cambiar, así que aplicar el
-  // score y la corrección aquí no revela nada en vivo.
-  const submitFinal = async () => {
-    if (submittedRef.current || !selectedRef.current || !question) return
-    submittedRef.current = true
-    const letter = selectedRef.current
-    const { data, error } = await supabase.rpc('submit_answer', {
+  const { phase, timeLeft } = useQuestionTimer(room, () => {})
+
+  // Marca o cambia la respuesta. Se sube a Supabase en cada cambio:
+  // submit_answer hace INSERT la primera vez (el admin la ve en vivo) y UPDATE
+  // en los siguientes mientras la sala siga in_question. El score y la
+  // corrección NO se aplican aquí (se leen al pasar a resultados) para no
+  // revelar la respuesta correcta mientras aún se puede cambiar.
+  const answer = async (letter) => {
+    if (!question || phase !== 'answering' || timeLeft <= 0) return
+    if (myAnswer?.answer === letter) return // misma opción ya marcada
+    setMyAnswer({ answer: letter }) // selección optimista (anillo)
+    const { error } = await supabase.rpc('submit_answer', {
       p_question_id: question.id,
       p_participant_id: participant.id,
       p_answer: letter,
     })
-    if (error) {
-      if (error.code !== '23505') submittedRef.current = false // permitir reintento salvo duplicado
-      return
+    if (error && error.code !== '23505') {
+      // El envío falló; el participante puede reintentar tocando otra opción.
+      // No bloqueamos la UI ni mostramos error intrusivo durante la cuenta atrás.
     }
-    const result = data?.[0]
-    setMyAnswer({ answer: letter, is_correct: result?.is_correct ?? false })
-    if (result) setScore(result.new_score)
   }
 
-  // El timer del participante a 0 dispara el envío de la respuesta final.
-  const { phase, timeLeft } = useQuestionTimer(room, submitFinal)
-
-  // Red de seguridad: si el reloj local no llegó a 0 o el admin cerró antes,
-  // asegura el envío al pasar a resultados.
+  // Al pasar a resultados, leer el estado final autoritativo del servidor (a
+  // prueba de carreras si el último cambio aún estaba en vuelo) y aplicar el
+  // score real. get_my_answer existe para esto (RLS no deja leer answers).
   useEffect(() => {
-    if (room.status === 'showing_results') submitFinal()
+    if (room.status !== 'showing_results' || !question) return
+    supabase
+      .rpc('get_my_answer', { p_question_id: question.id, p_participant_id: participant.id })
+      .then(({ data }) => {
+        const row = data?.[0]
+        setMyAnswer(row ? { answer: row.answer, is_correct: row.is_correct } : null)
+      })
+    supabase
+      .from('participants')
+      .select('score')
+      .eq('id', participant.id)
+      .single()
+      .then(({ data }) => { if (data) setScore(data.score) })
   }, [room.status, question?.id])
 
-  // Selección local: el participante puede cambiarla libremente mientras corre
-  // el timer. No llama a Supabase (eso ocurre una sola vez, al final).
-  const select = (letter) => {
-    if (phase !== 'answering' || timeLeft <= 0 || submittedRef.current) return
-    selectedRef.current = letter
-    setMyAnswer({ answer: letter })
-  }
-
-  const disabled = phase !== 'answering' || timeLeft <= 0 || submittedRef.current
+  const disabled = phase !== 'answering' || timeLeft <= 0
 
   return (
     <Stage medium>
@@ -2223,7 +2218,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
                       variants={listItem}
                       whileTap={disabled ? undefined : { scale: 0.97 }}
                       disabled={disabled}
-                      onClick={() => select(l)}
+                      onClick={() => answer(l)}
                       aria-label={`Opción ${l}: ${opt}`}
                       className={`relative flex min-h-[4rem] items-center gap-2.5 rounded-2xl px-3.5 py-2.5 text-left text-white shadow-sm transition sm:min-h-[4.5rem] sm:gap-3 sm:px-4 sm:py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-50 ${solid} ${disabled ? '' : hover} ${
                         selected ? 'ring-4 ring-white ring-offset-2 ring-offset-zinc-50 dark:ring-offset-zinc-950' : ''
