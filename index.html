@@ -11,7 +11,9 @@
           var t = localStorage.getItem('aq-theme')
           if (!t) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
           if (t === 'dark') document.documentElement.classList.add('dark')
-        } catch (e) {}
+        } catch {
+          /* localStorage/matchMedia no disponibles: se queda el tema claro. */
+        }
       })()
     </script>
   </head>

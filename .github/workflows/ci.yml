@@ -14,6 +14,9 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      # --ignore-scripts: no ejecutar scripts de ciclo de vida de las
+      # dependencias durante la instalación (superficie de supply chain).
+      # Verificado: test y build funcionan sin ellos.
+      - run: npm ci --ignore-scripts
       - run: npm run test
       - run: npm run build

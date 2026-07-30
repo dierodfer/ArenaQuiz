@@ -60,7 +60,7 @@ function statsFromCounts(total, correct) {
 
 // Lista ordenada de categorías únicas del banco de preguntas.
 function uniqueCategories(questions) {
-  return [...new Set(questions.map((q) => q.category))].sort()
+  return [...new Set(questions.map((q) => q.category))].sort((a, b) => a.localeCompare(b))
 }
 
 // Agrupa las preguntas por categoría (orden alfabético) para mostrarlas.
@@ -87,9 +87,27 @@ const LETTER_META = {
   D: { Icon: Square, solid: 'bg-emerald-500', hover: 'hover:bg-emerald-600', bar: 'bg-emerald-500' },
 }
 
+// Aleatoriedad criptográfica (Web Crypto) en vez de Math.random: el código de
+// sala es lo único que protege el acceso a una sala, así que no debe poder
+// adivinarse a partir de otros códigos ya emitidos.
+function randomUint32() {
+  const buf = new Uint32Array(1)
+  crypto.getRandomValues(buf)
+  return buf[0]
+}
+
+// Entero uniforme en [0, max). Descarta el resto sobrante del rango uint32 para
+// no sesgar los valores cuando 2^32 no es múltiplo exacto de max.
+export function randomInt(max) {
+  const limit = Math.floor(2 ** 32 / max) * max
+  let n = randomUint32()
+  while (n >= limit) n = randomUint32()
+  return n % max
+}
+
 export function generateRoomCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-  return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
+  return Array.from({ length: 6 }, () => chars[randomInt(chars.length)]).join('')
 }
 
 const USERNAME_MIN_LENGTH = 3
@@ -162,7 +180,7 @@ function buildRoomUrl(roomId) {
 }
 
 // Marcas diacríticas combinantes (acentos) en Unicode, para poder quitarlas.
-const DIACRITICS = new RegExp('[\\u0300-\\u036f]', 'g')
+const DIACRITICS = /[\u0300-\u036f]/g
 
 // Minúsculas y sin acentos, para comparar contra la lista negra.
 function normalizeForMatch(str) {
@@ -206,7 +224,9 @@ export function validateEmail(email) {
   if (trimmed.length > EMAIL_MAX_LENGTH) {
     return `El email no puede superar los ${EMAIL_MAX_LENGTH} caracteres.`
   }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+  // Clases disjuntas (el punto queda fuera de los tramos) para que no haya
+  // ambigüedad al hacer backtracking en entradas largas sin @ o sin punto.
+  if (!/^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/.test(trimmed)) {
     return 'Introduce un email válido.'
   }
   return null
@@ -356,6 +376,12 @@ function useCurrentQuestion(room) {
   return question
 }
 
+// Helper de módulo (en lugar de una función anidada más dentro del callback de
+// realtime) para quitar una fila por id de un estado de lista.
+function withoutId(list, id) {
+  return list.filter((item) => item.id !== id)
+}
+
 // Participantes de la sala para el admin: carga inicial + realtime de altas
 // (INSERT, lobby en vivo) y bajas (DELETE, expulsión). Deliberadamente NO
 // escucha UPDATE: la única actualización de participants es el score (lo sube
@@ -385,7 +411,7 @@ function useLobbyParticipants(roomId) {
       .on(
         'postgres_changes',
         { event: 'DELETE', schema: 'public', table: 'participants', filter: `room_id=eq.${roomId}` },
-        (payload) => setParticipants((prev) => prev.filter((p) => p.id !== payload.old.id)),
+        (payload) => setParticipants((prev) => withoutId(prev, payload.old.id)),
       )
       .subscribe()
     return () => {
@@ -458,9 +484,14 @@ const enterTransition = { duration: 0.25, ease: [0.22, 1, 0.36, 1] }
 const listStagger = { hidden: {}, show: { transition: { staggerChildren: 0.04 } } }
 const listItem = { hidden: { opacity: 0, y: 8 }, show: { opacity: 1, y: 0 } }
 
+function stageWidth(wide, medium) {
+  if (wide) return 'max-w-3xl'
+  if (medium) return 'max-w-lg'
+  return 'max-w-md'
+}
+
 function Stage({ wide, medium, children }) {
-  const w = wide ? 'max-w-3xl' : medium ? 'max-w-lg' : 'max-w-md'
-  return <div className={`mx-auto w-full ${w}`}>{children}</div>
+  return <div className={`mx-auto w-full ${stageWidth(wide, medium)}`}>{children}</div>
 }
 
 function Panel({ children, className = '' }) {
@@ -678,6 +709,16 @@ function AnswerBreakdown({ question, answers, showCorrect, totalParticipants }) 
 
 // ---------- RANKING ----------
 
+// Borde/fondo de cada tarjeta del podio: destacado si es el propio participante,
+// dorado si es el primero, neutro en el resto.
+function podiumCardTone(highlighted, first) {
+  if (highlighted) return 'border-indigo-500/60 bg-indigo-50 dark:bg-indigo-500/10'
+  if (first) {
+    return 'border-amber-300/60 bg-gradient-to-b from-amber-50 to-white dark:border-amber-500/30 dark:from-amber-500/10 dark:to-zinc-900'
+  }
+  return 'border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900'
+}
+
 function Podium({ top, highlightId }) {
   const medal = ['text-amber-400', 'text-zinc-400', 'text-amber-600']
   return (
@@ -690,13 +731,7 @@ function Podium({ top, highlightId }) {
           transition={{ delay: i * 0.08, duration: 0.3, ease: 'easeOut' }}
           className={`relative rounded-2xl border p-4 text-center ${
             i === 0 ? 'sm:-mt-2' : ''
-          } ${
-            p.id === highlightId
-              ? 'border-indigo-500/60 bg-indigo-50 dark:bg-indigo-500/10'
-              : i === 0
-                ? 'border-amber-300/60 bg-gradient-to-b from-amber-50 to-white dark:border-amber-500/30 dark:from-amber-500/10 dark:to-zinc-900'
-                : 'border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900'
-          }`}
+          } ${podiumCardTone(p.id === highlightId, i === 0)}`}
         >
           <div className="mx-auto mb-1 flex h-9 items-center justify-center">
             {i === 0 ? (
@@ -948,7 +983,7 @@ function AdminMenu({ session, onCreate, onBank }) {
             <MenuCard icon={Plus} title="Crear sala" desc="Configura tiempo y elige preguntas" onClick={onCreate} accent />
             <MenuCard icon={Library} title="Banco de preguntas" desc="Crea y organiza por categoría" onClick={onBank} />
           </div>
-          <button className="btn-secondary" onClick={() => supabase.auth.signOut()}>
+          <button type="button" className="btn-secondary" onClick={() => supabase.auth.signOut()}>
             <LogOut className="h-4 w-4" aria-hidden="true" />
             Cerrar sesión
           </button>
@@ -1134,8 +1169,7 @@ function QuestionBank({ session, onBack }) {
                   <code className="rounded bg-zinc-100 px-1 py-0.5 dark:bg-zinc-800">
                     {'{ "titulo", "preguntas": [{ "pregunta", "opciones", "respuesta_correcta" }] }'}
                   </code>
-                  . El "titulo" se usa como categoría para todas las preguntas; cada pregunta admite de 2 a 4
-                  opciones.
+                  {'. El "titulo" se usa como categoría para todas las preguntas; cada pregunta admite de 2 a 4 opciones.'}
                 </p>
                 <textarea
                   className="input min-h-40 font-mono text-xs"
@@ -1414,7 +1448,9 @@ function CreateRoom({ session, setRoom, onBack }) {
                 <Clock className="h-4 w-4 text-zinc-400" aria-hidden="true" />
                 Segundos por pregunta
               </p>
-              <div className="grid grid-cols-5 gap-2" role="group" aria-label="Segundos por pregunta">
+              {/* min-w-0 neutraliza el min-inline-size: min-content que los
+                  navegadores aplican por defecto a fieldset. */}
+              <fieldset className="grid min-w-0 grid-cols-5 gap-2" aria-label="Segundos por pregunta">
                 {[10, 15, 20, 25, 30].map((s) => (
                   <button
                     key={s}
@@ -1426,7 +1462,7 @@ function CreateRoom({ session, setRoom, onBack }) {
                     {s}
                   </button>
                 ))}
-              </div>
+              </fieldset>
             </div>
 
             <div>
@@ -1468,7 +1504,7 @@ function CreateRoom({ session, setRoom, onBack }) {
                   No tienes preguntas en el banco. Crea alguna primero.
                 </div>
               ) : (
-                <div className="flex flex-wrap gap-2" role="group" aria-label="Categoría">
+                <fieldset className="flex min-w-0 flex-wrap gap-2" aria-label="Categoría">
                   {categories.map((c) => (
                     <button
                       key={c}
@@ -1480,7 +1516,7 @@ function CreateRoom({ session, setRoom, onBack }) {
                       {c}
                     </button>
                   ))}
-                </div>
+                </fieldset>
               )}
             </div>
 
@@ -1716,7 +1752,7 @@ function AdminRoom({ room, setRoom, onExit }) {
                   ))}
                 </ol>
                 <div className="mx-auto max-w-sm">
-                  <button className="btn" disabled={updatingRoom} onClick={() => updateRoom({ status: 'open' })}>
+                  <button type="button" className="btn" disabled={updatingRoom} onClick={() => updateRoom({ status: 'open' })}>
                     <Unlock className="h-4 w-4" aria-hidden="true" />
                     Abrir sala
                   </button>
@@ -1785,6 +1821,7 @@ function AdminRoom({ room, setRoom, onExit }) {
                 )}
                 <div className="mx-auto max-w-sm">
                   <button
+                    type="button"
                     className="btn"
                     disabled={questions.length === 0 || updatingRoom}
                     onClick={() => updateRoom({ status: 'closed' })}
@@ -1811,6 +1848,7 @@ function AdminRoom({ room, setRoom, onExit }) {
                 </div>
                 <div className="mx-auto max-w-sm">
                   <button
+                    type="button"
                     className="btn"
                     disabled={questions.length === 0 || updatingRoom}
                     onClick={() => updateRoom({ current_question_index: 0, status: 'in_question' })}
@@ -1861,11 +1899,11 @@ function AdminRoom({ room, setRoom, onExit }) {
                   <p className="text-xs text-zinc-400">El desglose se mostrará al agotarse el tiempo.</p>
                 </div>
                 <div className="mx-auto flex max-w-sm flex-col gap-2">
-                  <button className="btn-secondary" disabled={updatingRoom} onClick={closeQuestion}>
+                  <button type="button" className="btn-secondary" disabled={updatingRoom} onClick={closeQuestion}>
                     <SkipForward className="h-4 w-4" aria-hidden="true" />
                     Saltar pregunta
                   </button>
-                  <button className="btn-ghost justify-center" disabled={updatingRoom} onClick={skipSurvey}>
+                  <button type="button" className="btn-ghost justify-center" disabled={updatingRoom} onClick={skipSurvey}>
                     <Trophy className="h-4 w-4" aria-hidden="true" />
                     Finalizar encuesta
                   </button>
@@ -1901,7 +1939,7 @@ function AdminRoom({ room, setRoom, onExit }) {
                 </div>
                 <AnswerBreakdown question={question} answers={liveAnswers} showCorrect={true} totalParticipants={participants.length} />
                 <div className="mx-auto flex max-w-sm flex-col gap-2">
-                  <button className="btn" disabled={updatingRoom} onClick={nextQuestion}>
+                  <button type="button" className="btn" disabled={updatingRoom} onClick={nextQuestion}>
                     {room.current_question_index + 1 < questions.length ? (
                       <>
                         <ChevronRight className="h-4 w-4" aria-hidden="true" />
@@ -1915,7 +1953,7 @@ function AdminRoom({ room, setRoom, onExit }) {
                     )}
                   </button>
                   {room.current_question_index + 1 < questions.length && (
-                    <button className="btn-ghost justify-center" disabled={updatingRoom} onClick={skipSurvey}>
+                    <button type="button" className="btn-ghost justify-center" disabled={updatingRoom} onClick={skipSurvey}>
                       <Trophy className="h-4 w-4" aria-hidden="true" />
                       Finalizar encuesta
                     </button>
@@ -1928,7 +1966,7 @@ function AdminRoom({ room, setRoom, onExit }) {
               <div className="space-y-6">
                 <Ranking roomId={room.id} finishMessage={room.finish_message} finishImage={room.finish_image} />
                 <div className="mx-auto max-w-sm">
-                  <button className="btn-secondary" onClick={onExit}>
+                  <button type="button" className="btn-secondary" onClick={onExit}>
                     <ArrowLeft className="h-4 w-4" aria-hidden="true" />
                     Volver al menú
                   </button>
@@ -2125,6 +2163,42 @@ function ParticipantApp({ initialRoomCode, onHome }) {
   )
 }
 
+// Veredicto de la pregunta para el participante: sin respuesta, acierto aún sin
+// confirmar (estado neutro para no parpadear un resultado equivocado), acierto o
+// fallo. Componente propio para no encadenar ternarios en el JSX.
+function AnswerVerdict({ myAnswer }) {
+  if (!myAnswer) {
+    return (
+      <>
+        <MinusCircle className="h-12 w-12 text-zinc-400 sm:h-16 sm:w-16" aria-hidden="true" />
+        <p className="text-lg font-semibold text-zinc-500 sm:text-xl dark:text-zinc-400">No respondiste</p>
+      </>
+    )
+  }
+  if (myAnswer.is_correct == null) {
+    return (
+      <>
+        <Loader2 className="h-12 w-12 animate-spin text-zinc-400 sm:h-16 sm:w-16" aria-hidden="true" />
+        <p className="text-lg font-semibold text-zinc-500 sm:text-xl dark:text-zinc-400">Comprobando…</p>
+      </>
+    )
+  }
+  if (myAnswer.is_correct) {
+    return (
+      <>
+        <CheckCircle2 className="h-12 w-12 text-emerald-500 sm:h-16 sm:w-16" aria-hidden="true" />
+        <p className="text-xl font-bold text-emerald-600 sm:text-2xl dark:text-emerald-400">¡Correcto!</p>
+      </>
+    )
+  }
+  return (
+    <>
+      <XCircle className="h-12 w-12 text-rose-500 sm:h-16 sm:w-16" aria-hidden="true" />
+      <p className="text-xl font-bold text-rose-600 sm:text-2xl dark:text-rose-400">Incorrecto</p>
+    </>
+  )
+}
+
 function ParticipantRoom({ room, setRoom, participant, onHome }) {
   const question = useCurrentQuestion(room)
   const [stats, setStats] = useState(null) // { total, correct, pct }; se lee en resultados
@@ -2226,7 +2300,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
           if (row.score != null) setScore(row.score)
           setStats(statsFromCounts(row.total ?? 0, row.correct ?? 0))
         })
-    }, Math.random() * RESULT_FETCH_JITTER_MS)
+    }, randomInt(RESULT_FETCH_JITTER_MS))
     return () => { active = false; clearTimeout(t) }
   }, [room.status, question?.id])
 
@@ -2316,10 +2390,10 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
                 })}
               </motion.div>
               {myAnswer && (
-                <p role="status" className="flex items-center justify-center gap-1.5 text-center text-sm font-medium text-zinc-500 dark:text-zinc-400">
+                <output className="flex items-center justify-center gap-1.5 text-center text-sm font-medium text-zinc-500 dark:text-zinc-400">
                   <Check className="h-4 w-4 text-emerald-500" aria-hidden="true" />
                   Puedes cambiar tu respuesta hasta que acabe el tiempo
-                </p>
+                </output>
               )}
             </div>
           )}
@@ -2335,29 +2409,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
                 transition={{ type: 'spring', stiffness: 300, damping: 18 }}
                 className="flex flex-col items-center gap-1.5"
               >
-                {!myAnswer ? (
-                  <>
-                    <MinusCircle className="h-12 w-12 text-zinc-400 sm:h-16 sm:w-16" aria-hidden="true" />
-                    <p className="text-lg font-semibold text-zinc-500 sm:text-xl dark:text-zinc-400">No respondiste</p>
-                  </>
-                ) : myAnswer.is_correct == null ? (
-                  // Respuesta marcada pero el acierto aún no se ha confirmado:
-                  // estado neutro para no parpadear un resultado equivocado.
-                  <>
-                    <Loader2 className="h-12 w-12 animate-spin text-zinc-400 sm:h-16 sm:w-16" aria-hidden="true" />
-                    <p className="text-lg font-semibold text-zinc-500 sm:text-xl dark:text-zinc-400">Comprobando…</p>
-                  </>
-                ) : myAnswer.is_correct ? (
-                  <>
-                    <CheckCircle2 className="h-12 w-12 text-emerald-500 sm:h-16 sm:w-16" aria-hidden="true" />
-                    <p className="text-xl font-bold text-emerald-600 sm:text-2xl dark:text-emerald-400">¡Correcto!</p>
-                  </>
-                ) : (
-                  <>
-                    <XCircle className="h-12 w-12 text-rose-500 sm:h-16 sm:w-16" aria-hidden="true" />
-                    <p className="text-xl font-bold text-rose-600 sm:text-2xl dark:text-rose-400">Incorrecto</p>
-                  </>
-                )}
+                <AnswerVerdict myAnswer={myAnswer} />
               </motion.div>
               <div className="rounded-xl border border-emerald-500/40 bg-emerald-50 p-3 dark:bg-emerald-500/10">
                 <p className="text-xs font-medium uppercase tracking-wide text-emerald-700/80 dark:text-emerald-400/80">
@@ -2385,7 +2437,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
             <div className="space-y-6">
               <Ranking roomId={room.id} highlightId={participant.id} finishMessage={room.finish_message} finishImage={room.finish_image} />
               <div className="mx-auto max-w-sm">
-                <button className="btn-secondary" onClick={onHome}>
+                <button type="button" className="btn-secondary" onClick={onHome}>
                   <Home className="h-4 w-4" aria-hidden="true" />
                   Volver al inicio
                 </button>
@@ -2454,20 +2506,25 @@ export default function App() {
     setRole(null)
   }
 
+  // El value del provider debe ser estable: si se recreara en cada render,
+  // re-renderizaría a todos los consumidores del contexto sin motivo.
+  const branding = useMemo(() => ({ setRoomLogo }), [])
+
+  let screen
+  if (role === 'admin') {
+    screen = <AdminApp initialRoomCode={initialHash} onBack={handleHome} />
+  } else if (role === 'participant') {
+    screen = <ParticipantApp initialRoomCode={initialHash} onHome={handleHome} />
+  } else {
+    screen = <RoleSelect onPick={setRole} roomCode={initialHash} />
+  }
+
   return (
     <MotionConfig reducedMotion="user">
-      <RoomBrandingContext.Provider value={{ setRoomLogo }}>
+      <RoomBrandingContext.Provider value={branding}>
         <div className="min-h-screen bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
           <Header theme={theme} setTheme={setTheme} roomLogo={roomLogo} />
-          <main className="px-4 py-8 sm:py-12">
-            {role === 'admin' ? (
-              <AdminApp initialRoomCode={initialHash} onBack={handleHome} />
-            ) : role === 'participant' ? (
-              <ParticipantApp initialRoomCode={initialHash} onHome={handleHome} />
-            ) : (
-              <RoleSelect onPick={setRole} roomCode={initialHash} />
-            )}
-          </main>
+          <main className="px-4 py-8 sm:py-12">{screen}</main>
         </div>
       </RoomBrandingContext.Provider>
     </MotionConfig>

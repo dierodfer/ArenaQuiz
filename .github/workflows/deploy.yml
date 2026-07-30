@@ -4,11 +4,6 @@ on:
   push:
     branches: [main]
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
 concurrency:
   group: pages
   cancel-in-progress: true
@@ -16,6 +11,10 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Permisos por job (mínimo privilegio): compilar solo necesita leer el repo;
+    # los permisos de Pages viven en el job de deploy.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -24,7 +23,9 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      # --ignore-scripts: ver nota en ci.yml (no se ejecutan scripts de
+      # ciclo de vida de las dependencias al instalar).
+      - run: npm ci --ignore-scripts
 
       # Fallar pronto y con un mensaje claro si faltan los secrets, en vez de
       # publicar un bundle roto (el SDK lanzaría "supabaseKey is required" en
@@ -59,6 +60,9 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
