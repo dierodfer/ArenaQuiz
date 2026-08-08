@@ -8,6 +8,7 @@ import {
   validateRoomName,
   formatRelativeTime,
   parseQuestionImport,
+  randomInt,
 } from './App'
 
 // App.jsx importa supabaseClient a nivel de módulo; lo mockeamos para que
@@ -24,6 +25,22 @@ describe('generateRoomCode', () => {
   it('genera códigos distintos entre llamadas', () => {
     const codes = new Set(Array.from({ length: 30 }, () => generateRoomCode()))
     expect(codes.size).toBeGreaterThan(1)
+  })
+})
+
+describe('randomInt', () => {
+  it('devuelve enteros dentro de [0, max)', () => {
+    for (let i = 0; i < 200; i += 1) {
+      const n = randomInt(32)
+      expect(Number.isInteger(n)).toBe(true)
+      expect(n).toBeGreaterThanOrEqual(0)
+      expect(n).toBeLessThan(32)
+    }
+  })
+
+  it('cubre más de un valor del rango', () => {
+    const values = new Set(Array.from({ length: 100 }, () => randomInt(10)))
+    expect(values.size).toBeGreaterThan(1)
   })
 })
 
@@ -66,12 +83,15 @@ describe('validateEmail', () => {
   it('acepta emails con formato válido', () => {
     expect(validateEmail('ana@example.com')).toBeNull()
     expect(validateEmail('  pedro.lopez@correo.es ')).toBeNull()
+    expect(validateEmail('ana@mail.example.com')).toBeNull()
   })
 
   it('rechaza formatos inválidos', () => {
     expect(validateEmail('no-es-un-email')).toBeTruthy()
     expect(validateEmail('falta@dominio')).toBeTruthy()
     expect(validateEmail('@sinnombre.com')).toBeTruthy()
+    expect(validateEmail('ana@example.')).toBeTruthy()
+    expect(validateEmail('ana@.com')).toBeTruthy()
   })
 
   it('rechaza emails de más de 50 caracteres', () => {
