@@ -920,7 +920,7 @@ function AdminAuth({ onBack }) {
             className="space-y-4"
             onSubmit={(e) => {
               e.preventDefault()
-              submit()
+              void submit()
             }}
           >
             <div>
@@ -1113,7 +1113,7 @@ function QuestionBank({ session, onBack }) {
             className="space-y-3 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-900/50"
             onSubmit={(e) => {
               e.preventDefault()
-              addQuestion()
+              void addQuestion()
             }}
           >
             <p className="text-sm font-semibold">Nueva pregunta</p>
@@ -1451,7 +1451,7 @@ function CreateRoom({ session, setRoom, onBack }) {
             className="space-y-6"
             onSubmit={(e) => {
               e.preventDefault()
-              createRoom()
+              void createRoom()
             }}
           >
             <div>
@@ -1731,7 +1731,7 @@ function AdminRoom({ room, setRoom, onExit }) {
   // por las preguntas restantes.
   const skipSurvey = () => {
     if (window.confirm('¿Terminar la encuesta y mostrar el ranking? Se omitirán las preguntas restantes.')) {
-      finishSurvey()
+      void finishSurvey()
     }
   }
 
@@ -2042,7 +2042,7 @@ function ParticipantApp({ initialRoomCode, onHome }) {
 
   useEffect(() => {
     if (participant || initialRoomCode) return
-    loadOpenRooms()
+    void loadOpenRooms()
   }, [participant, initialRoomCode])
 
   const usernameError = validateUsername(username)
@@ -2092,7 +2092,7 @@ function ParticipantApp({ initialRoomCode, onHome }) {
             className="space-y-5"
             onSubmit={(e) => {
               e.preventDefault()
-              join()
+              void join()
             }}
           >
             <div>
