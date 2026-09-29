@@ -252,6 +252,22 @@ export function formatRelativeTime(iso, now = Date.now()) {
   return `hace ${h} h`
 }
 
+const IMPORT_EXAMPLE = `{
+  "titulo": "Geografía de América",
+  "preguntas": [
+    {
+      "pregunta": "¿Cuál es la capital de Argentina?",
+      "opciones": ["Buenos Aires", "Córdoba", "Rosario", "La Plata"],
+      "respuesta_correcta": "Buenos Aires"
+    },
+    {
+      "pregunta": "¿Cuál es el río más largo de América del Sur?",
+      "opciones": ["Amazonas", "Paraná", "Orinoco"],
+      "respuesta_correcta": "Amazonas"
+    }
+  ]
+}`
+
 // Parsea y valida el JSON de importación de preguntas al banco. Formato
 // esperado: { titulo, preguntas: [{ pregunta, opciones, respuesta_correcta }] }.
 // `titulo` se usa como categoría para todas las preguntas. Cada pregunta
@@ -1165,12 +1181,15 @@ function QuestionBank({ session, onBack }) {
             {showImport && (
               <div className="space-y-3 border-t border-zinc-200 p-4 dark:border-zinc-800">
                 <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  Pega un JSON con el formato{' '}
-                  <code className="rounded bg-zinc-100 px-1 py-0.5 dark:bg-zinc-800">
-                    {'{ "titulo", "preguntas": [{ "pregunta", "opciones", "respuesta_correcta" }] }'}
-                  </code>
-                  {'. El "titulo" se usa como categoría para todas las preguntas; cada pregunta admite de 2 a 4 opciones.'}
+                  Pega un JSON como el del ejemplo: el "titulo" será la categoría, cada pregunta admite de 2 a 4
+                  opciones y "respuesta_correcta" debe coincidir exactamente con una de ellas.
                 </p>
+                <details className="rounded-lg border border-zinc-200 dark:border-zinc-800">
+                  <summary className="cursor-pointer p-2 text-xs font-semibold">Ver ejemplo</summary>
+                  <pre className="overflow-x-auto border-t border-zinc-200 p-3 font-mono text-xs dark:border-zinc-800">
+                    {IMPORT_EXAMPLE}
+                  </pre>
+                </details>
                 <textarea
                   className="input min-h-40 font-mono text-xs"
                   placeholder='{"titulo": "Mi categoría", "preguntas": [...]}'
