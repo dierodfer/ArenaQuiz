@@ -81,10 +81,10 @@ function isQuestionFormValid(title, options, category) {
 // proyector. Los 4 colores saturados son una excepción deliberada al resto de
 // la paleta neutra: solo se usan aquí, donde el código de color aporta señal.
 const LETTER_META = {
-  A: { Icon: Triangle, solid: 'bg-rose-500', hover: 'hover:bg-rose-600', bar: 'bg-rose-500' },
-  B: { Icon: Diamond, solid: 'bg-sky-500', hover: 'hover:bg-sky-600', bar: 'bg-sky-500' },
-  C: { Icon: Circle, solid: 'bg-amber-500', hover: 'hover:bg-amber-600', bar: 'bg-amber-500' },
-  D: { Icon: Square, solid: 'bg-emerald-500', hover: 'hover:bg-emerald-600', bar: 'bg-emerald-500' },
+  A: { Icon: Triangle, solid: 'bg-rose-500', soft: 'border-rose-200 bg-rose-50 hover:bg-rose-100 dark:border-rose-500/30 dark:bg-rose-500/10 dark:hover:bg-rose-500/20', bar: 'bg-rose-500' },
+  B: { Icon: Diamond, solid: 'bg-sky-500', soft: 'border-sky-200 bg-sky-50 hover:bg-sky-100 dark:border-sky-500/30 dark:bg-sky-500/10 dark:hover:bg-sky-500/20', bar: 'bg-sky-500' },
+  C: { Icon: Circle, solid: 'bg-amber-500', soft: 'border-amber-200 bg-amber-50 hover:bg-amber-100 dark:border-amber-500/30 dark:bg-amber-500/10 dark:hover:bg-amber-500/20', bar: 'bg-amber-500' },
+  D: { Icon: Square, solid: 'bg-emerald-500', soft: 'border-emerald-200 bg-emerald-50 hover:bg-emerald-100 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:hover:bg-emerald-500/20', bar: 'bg-emerald-500' },
 }
 
 // Aleatoriedad criptográfica (Web Crypto) en vez de Math.random: el código de
@@ -642,18 +642,35 @@ function NoCopy({ children, className = '' }) {
   )
 }
 
-// Barra de progreso del temporizador. Acompaña a la cuenta atrás numérica
-// durante la fase "answering"; se vacía a medida que se agota el tiempo.
-function TimerBar({ phase, timeLeft, total }) {
+// Temporizador circular (SVG). Muestra la cuenta atrás en el centro durante la
+// fase "answering" y el arco se vacía a medida que se agota el tiempo.
+function TimerRing({ phase, timeLeft, total, className = 'h-16 w-16 sm:h-20 sm:w-20' }) {
   if (phase !== 'answering') return null
-  const pct = total ? Math.max(0, Math.min(100, (timeLeft / total) * 100)) : 0
+  const r = 45
+  const circumference = 2 * Math.PI * r
+  const ratio = total ? Math.max(0, Math.min(1, timeLeft / total)) : 0
   const low = timeLeft <= 5
   return (
-    <div className="mx-auto h-2 w-full max-w-md overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800" aria-hidden="true">
-      <div
-        className={`h-full rounded-full transition-all duration-1000 ease-linear ${low ? 'bg-rose-500' : 'bg-indigo-500'}`}
-        style={{ width: `${pct}%` }}
-      />
+    <div className={`relative shrink-0 ${className}`} role="timer" aria-label={`${timeLeft} segundos`}>
+      <svg viewBox="0 0 100 100" className="h-full w-full -rotate-90" aria-hidden="true">
+        <circle cx="50" cy="50" r={r} fill="none" strokeWidth="8" className="stroke-zinc-200 dark:stroke-zinc-800" />
+        <circle
+          cx="50"
+          cy="50"
+          r={r}
+          fill="none"
+          strokeWidth="8"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - ratio)}
+          className={`transition-[stroke-dashoffset] duration-1000 ease-linear ${low ? 'stroke-rose-500' : 'stroke-indigo-500'}`}
+        />
+      </svg>
+      <span
+        className={`absolute inset-0 flex items-center justify-center font-mono text-2xl font-bold tabular-nums sm:text-3xl ${low ? 'text-rose-500' : ''}`}
+      >
+        {timeLeft}
+      </span>
     </div>
   )
 }
@@ -903,7 +920,7 @@ function AdminAuth({ onBack }) {
             className="space-y-4"
             onSubmit={(e) => {
               e.preventDefault()
-              submit()
+              void submit()
             }}
           >
             <div>
@@ -1096,7 +1113,7 @@ function QuestionBank({ session, onBack }) {
             className="space-y-3 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-900/50"
             onSubmit={(e) => {
               e.preventDefault()
-              addQuestion()
+              void addQuestion()
             }}
           >
             <p className="text-sm font-semibold">Nueva pregunta</p>
@@ -1434,7 +1451,7 @@ function CreateRoom({ session, setRoom, onBack }) {
             className="space-y-6"
             onSubmit={(e) => {
               e.preventDefault()
-              createRoom()
+              void createRoom()
             }}
           >
             <div>
@@ -1714,7 +1731,7 @@ function AdminRoom({ room, setRoom, onExit }) {
   // por las preguntas restantes.
   const skipSurvey = () => {
     if (window.confirm('¿Terminar la encuesta y mostrar el ranking? Se omitirán las preguntas restantes.')) {
-      finishSurvey()
+      void finishSurvey()
     }
   }
 
@@ -1894,12 +1911,13 @@ function AdminRoom({ room, setRoom, onExit }) {
                   </p>
                 )}
                 {phase === 'answering' && (
-                  <div className="space-y-3">
-                    <p className={`font-mono text-5xl font-bold tabular-nums sm:text-6xl ${timeLeft <= 5 ? 'text-rose-500' : ''}`}>
-                      {timeLeft}
-                      <span className="text-2xl text-zinc-400">s</span>
-                    </p>
-                    <TimerBar phase={phase} timeLeft={timeLeft} total={room.time_per_question} />
+                  <div className="flex justify-center">
+                    <TimerRing
+                      phase={phase}
+                      timeLeft={timeLeft}
+                      total={room.time_per_question}
+                      className="h-28 w-28 sm:h-36 sm:w-36 [&_span]:text-5xl sm:[&_span]:text-6xl"
+                    />
                   </div>
                 )}
                 <div className="mx-auto max-w-md space-y-2">
@@ -2024,7 +2042,7 @@ function ParticipantApp({ initialRoomCode, onHome }) {
 
   useEffect(() => {
     if (participant || initialRoomCode) return
-    loadOpenRooms()
+    void loadOpenRooms()
   }, [participant, initialRoomCode])
 
   const usernameError = validateUsername(username)
@@ -2074,7 +2092,7 @@ function ParticipantApp({ initialRoomCode, onHome }) {
             className="space-y-5"
             onSubmit={(e) => {
               e.preventDefault()
-              join()
+              void join()
             }}
           >
             <div>
@@ -2326,15 +2344,19 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
   const disabled = phase !== 'answering' || timeLeft <= 0
 
   return (
-    <Stage medium>
-      <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-2 dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="flex min-w-0 items-center gap-2">
+    <Stage wide>
+      <div className="relative mb-3 flex items-center justify-between gap-3 overflow-hidden rounded-xl border border-zinc-200 bg-white px-4 py-2 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="pointer-events-none absolute inset-y-0 right-16 flex" aria-hidden="true">
+          <span className="w-8 -skew-x-[30deg] bg-indigo-500/10" />
+          <span className="ml-2 w-6 -skew-x-[30deg] bg-indigo-500/20" />
+        </div>
+        <div className="relative flex min-w-0 items-center gap-2">
           <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-400">
             <User className="h-4 w-4" aria-hidden="true" />
           </span>
           <span className="truncate font-medium">{participant.username}</span>
         </div>
-        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-zinc-100 px-2.5 py-1 text-sm font-semibold tabular-nums dark:bg-zinc-800">
+        <span className="relative inline-flex shrink-0 items-center gap-1.5 rounded-full bg-zinc-100 px-2.5 py-1 text-sm font-semibold tabular-nums dark:bg-zinc-800">
           {score}
           <span className="text-xs font-normal text-zinc-500 dark:text-zinc-400">pts</span>
         </span>
@@ -2357,53 +2379,47 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
 
           {room.status === 'in_question' && question && (
             <div className="space-y-3 sm:space-y-4">
-              <h3 className="text-center text-lg font-bold leading-snug sm:text-xl">
-                <NoCopy>{question.title}</NoCopy>
-              </h3>
+              <div className="flex items-center justify-between gap-3 sm:gap-4">
+                <h3 className="min-w-0 flex-1 break-words text-base font-bold leading-tight sm:text-lg md:text-base">
+                  <NoCopy>{question.title}</NoCopy>
+                </h3>
+                <TimerRing phase={phase} timeLeft={timeLeft} total={room.time_per_question} />
+              </div>
               {phase === 'reading' && (
-                <p className="flex items-center justify-center gap-1.5 text-center text-sm font-medium text-amber-600 dark:text-amber-400">
+                <p className="flex items-center gap-1.5 text-sm font-medium text-amber-600 dark:text-amber-400">
                   <Eye className="h-4 w-4" aria-hidden="true" />
                   Lee la pregunta…
                 </p>
-              )}
-              {phase === 'answering' && (
-                <div className="space-y-1.5">
-                  <p className={`text-center font-mono text-3xl font-bold tabular-nums sm:text-4xl ${timeLeft <= 5 ? 'text-rose-500' : ''}`}>
-                    {timeLeft}
-                  </p>
-                  <TimerBar phase={phase} timeLeft={timeLeft} total={room.time_per_question} />
-                </div>
               )}
               <motion.div
                 variants={listStagger}
                 initial="hidden"
                 animate="show"
-                className="grid grid-cols-1 gap-2.5 sm:gap-3 md:grid-cols-2"
+                className="grid grid-cols-1 items-stretch gap-2.5 sm:gap-3 md:grid-cols-2"
               >
                 {question.options.map((opt, i) => {
                   const l = LETTERS[i]
-                  const { Icon, solid, hover } = LETTER_META[l]
+                  const { Icon, solid, soft } = LETTER_META[l]
                   const selected = myAnswer?.answer === l
                   return (
                     <motion.button
                       key={l}
                       variants={listItem}
-                      whileTap={disabled ? undefined : { scale: 0.97 }}
+                      whileTap={disabled ? undefined : { scale: 0.98 }}
                       disabled={disabled}
                       onClick={() => answer(l)}
                       aria-label={`Opción ${l}: ${opt}`}
-                      className={`relative flex min-h-[4rem] items-center gap-2.5 rounded-2xl px-3.5 py-2.5 text-left text-white shadow-sm transition sm:min-h-[4.5rem] sm:gap-3 sm:px-4 sm:py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-50 ${solid} ${disabled ? '' : hover} ${
-                        selected ? 'ring-4 ring-white ring-offset-2 ring-offset-zinc-50 dark:ring-offset-zinc-950' : ''
+                      className={`relative flex min-h-[4rem] items-center gap-3 rounded-2xl border px-3 py-3 text-left text-zinc-900 transition sm:min-h-[4.5rem] sm:px-4 dark:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:opacity-60 ${soft} ${
+                        selected ? 'ring-2 ring-indigo-500 ring-offset-2 ring-offset-white dark:ring-offset-zinc-900' : ''
                       }`}
                     >
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white/20 sm:h-8 sm:w-8">
-                        <Icon className="h-3.5 w-3.5 sm:h-4 sm:w-4" aria-hidden="true" />
+                      <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white sm:h-12 sm:w-12 ${solid}`}>
+                        <Icon className="h-5 w-5 sm:h-6 sm:w-6" aria-hidden="true" />
                       </span>
-                      <span className="min-w-0 text-[0.8125rem] font-semibold leading-snug sm:text-sm md:text-base">
-                        <span className="mr-1 opacity-80">{l}.</span>
+                      <span className="min-w-0 flex-1 break-words text-xs font-medium leading-snug hyphens-auto sm:text-sm md:text-xs">
                         <NoCopy>{opt}</NoCopy>
                       </span>
-                      {selected && <Check className="ml-auto h-5 w-5 shrink-0" aria-hidden="true" />}
+                      {selected && <Check className="h-5 w-5 shrink-0 text-indigo-600 dark:text-indigo-400" aria-hidden="true" />}
                     </motion.button>
                   )
                 })}
