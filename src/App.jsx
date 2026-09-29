@@ -2380,7 +2380,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
           {room.status === 'in_question' && question && (
             <div className="space-y-3 sm:space-y-4">
               <div className="flex items-center justify-between gap-3 sm:gap-4">
-                <h3 className="min-w-0 flex-1 break-words text-lg font-bold leading-snug sm:text-2xl">
+                <h3 className="min-w-0 flex-1 break-words text-base font-bold leading-tight sm:text-lg md:text-base">
                   <NoCopy>{question.title}</NoCopy>
                 </h3>
                 <TimerRing phase={phase} timeLeft={timeLeft} total={room.time_per_question} />
@@ -2416,7 +2416,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
                       <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white sm:h-12 sm:w-12 ${solid}`}>
                         <Icon className="h-5 w-5 sm:h-6 sm:w-6" aria-hidden="true" />
                       </span>
-                      <span className="min-w-0 flex-1 break-words text-sm font-medium leading-snug hyphens-auto sm:text-base">
+                      <span className="min-w-0 flex-1 break-words text-xs font-medium leading-snug hyphens-auto sm:text-sm md:text-xs">
                         <NoCopy>{opt}</NoCopy>
                       </span>
                       {selected && <Check className="h-5 w-5 shrink-0 text-indigo-600 dark:text-indigo-400" aria-hidden="true" />}
