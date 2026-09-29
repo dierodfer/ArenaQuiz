@@ -2344,7 +2344,7 @@ function ParticipantRoom({ room, setRoom, participant, onHome }) {
   const disabled = phase !== 'answering' || timeLeft <= 0
 
   return (
-    <Stage medium>
+    <Stage wide>
       <div className="relative mb-3 flex items-center justify-between gap-3 overflow-hidden rounded-xl border border-zinc-200 bg-white px-4 py-2 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="pointer-events-none absolute inset-y-0 right-16 flex" aria-hidden="true">
           <span className="w-8 -skew-x-[30deg] bg-indigo-500/10" />
