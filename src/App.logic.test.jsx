@@ -9,6 +9,7 @@ import {
   formatRelativeTime,
   parseQuestionImport,
   randomInt,
+  joinRoomErrorMessage,
 } from './App'
 
 // App.jsx importa supabaseClient a nivel de módulo; lo mockeamos para que
@@ -96,6 +97,20 @@ describe('validateEmail', () => {
 
   it('rechaza emails de más de 50 caracteres', () => {
     expect(validateEmail(`${'a'.repeat(45)}@b.com`)).toBeTruthy() // 51
+  })
+})
+
+describe('joinRoomErrorMessage', () => {
+  it('traduce los códigos de error de join_room', () => {
+    expect(joinRoomErrorMessage({ message: 'room_not_found' })).toBe('Sala no encontrada')
+    expect(joinRoomErrorMessage({ message: 'room_not_open' })).toBe('La sala ya no está abierta')
+    expect(joinRoomErrorMessage({ message: 'room_full' })).toBe('La sala está llena (máx. 200)')
+  })
+
+  it('devuelve un mensaje genérico ante errores desconocidos o ausentes', () => {
+    const generic = 'No se pudo entrar en la sala. Inténtalo de nuevo.'
+    expect(joinRoomErrorMessage({ message: 'network down' })).toBe(generic)
+    expect(joinRoomErrorMessage(null)).toBe(generic)
   })
 })
 
