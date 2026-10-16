@@ -232,6 +232,21 @@ export function validateEmail(email) {
   return null
 }
 
+// Traduce los códigos de error que lanza la RPC join_room a un texto para el
+// usuario. Supabase devuelve el texto del RAISE EXCEPTION en error.message.
+const JOIN_ROOM_ERRORS = {
+  room_not_found: 'Sala no encontrada',
+  room_not_open: 'La sala ya no está abierta',
+  room_full: `La sala está llena (máx. ${MAX_PARTICIPANTS})`,
+  invalid_username: 'El nombre debe tener entre 3 y 10 caracteres.',
+  invalid_email: 'El email no es válido.',
+}
+
+export function joinRoomErrorMessage(error) {
+  const code = Object.keys(JOIN_ROOM_ERRORS).find((key) => error?.message?.includes(key))
+  return code ? JOIN_ROOM_ERRORS[code] : 'No se pudo entrar en la sala. Inténtalo de nuevo.'
+}
+
 // Valida el nombre de la sala: obligatorio y máximo 25 caracteres.
 export function validateRoomName(name) {
   const trimmed = name.trim()
@@ -2052,30 +2067,17 @@ function ParticipantApp({ initialRoomCode, onHome }) {
   const join = async () => {
     setError('')
     if (!canJoin) return
-    const { data: r, error: rErr } = await supabase
-      .from('rooms')
-      .select('*')
-      .eq('id', selectedRoomId)
-      .single()
-    if (rErr || !r) return setError('Sala no encontrada')
-    if (r.status !== 'open') return setError('La sala ya no está abierta')
-    const { count, error: countErr } = await supabase
-      .from('participants')
-      .select('*', { count: 'exact', head: true })
-      .eq('room_id', r.id)
-    // Si la query falla o no devuelve count, no asumimos que hay sitio: una
-    // comparación contra null daría false y dejaría entrar con la sala llena.
-    if (countErr || count == null) return setError('No se pudo comprobar el aforo. Inténtalo de nuevo.')
-    if (count >= MAX_PARTICIPANTS) return setError(`La sala está llena (máx. ${MAX_PARTICIPANTS})`)
-    const { data: p, error: pErr } = await supabase
-      .from('participants')
-      .insert({ room_id: r.id, username: username.trim(), email: email.trim() || null, score: 0 })
-      .select()
-      .single()
-    if (pErr) return setError(pErr.message)
-    setRoomHash(r.id)
-    setRoom(r)
-    setParticipant(p)
+    // Una sola RPC valida sala abierta + aforo e inserta el participante en
+    // servidor (antes eran 3 peticiones: leer sala, contar e insertar).
+    const { data, error: joinErr } = await supabase.rpc('join_room', {
+      p_room_id: selectedRoomId,
+      p_username: username.trim(),
+      p_email: email.trim() || null,
+    })
+    if (joinErr || !data?.room || !data?.participant) return setError(joinRoomErrorMessage(joinErr))
+    setRoomHash(data.room.id)
+    setRoom(data.room)
+    setParticipant(data.participant)
   }
 
   if (participant && room) {

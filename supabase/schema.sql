@@ -129,7 +129,7 @@ grant select on rooms to anon, authenticated;
 grant insert, update on rooms to authenticated;
 
 grant select on participants to anon, authenticated;
-grant insert on participants to anon;
+-- Sin INSERT directo: los participantes se unen solo vía join_room() (RPC).
 grant delete on participants to authenticated;
 
 grant select, insert, update, delete on questions to authenticated;
@@ -167,18 +167,11 @@ create policy "rooms_update_own" on rooms
   using (admin_id = auth.uid())
   with check (admin_id = auth.uid());
 
--- participants: visibles para todos (lobby y ranking); cualquiera puede
--- unirse mientras la sala esté "open". El score solo se actualiza vía
--- submit_answer().
+-- participants: visibles para todos (lobby y ranking). No hay política de
+-- INSERT: unirse a una sala pasa por join_room() (valida sala abierta y aforo
+-- en servidor). El score solo se actualiza vía submit_answer().
 create policy "participants_select_all" on participants
   for select using (true);
-
-create policy "participants_insert_if_room_open" on participants
-  for insert
-  with check (
-    exists (select 1 from rooms where rooms.id = participants.room_id and rooms.status = 'open')
-    and (select count(*) from participants p where p.room_id = participants.room_id) < 200
-  );
 
 -- El admin dueño de la sala puede expulsar participantes en el lobby (antes de
 -- que empiece el juego); no se permite una vez que la sala arranca para no
@@ -370,6 +363,55 @@ as $$
 $$;
 
 grant execute on function get_my_result(uuid, uuid) to anon, authenticated;
+
+-- Une un participante a una sala en una sola llamada: comprueba que la sala
+-- existe y está "open", que no se ha alcanzado el aforo (200) y crea la fila
+-- de participants. Sustituye a las 3 peticiones que hacía el cliente (leer
+-- sala + contar participantes + INSERT), reduciendo peticiones y líneas de log
+-- por cada participante que entra. El FOR UPDATE sobre la sala serializa las
+-- uniones simultáneas para que el aforo no se pueda superar por carreras.
+-- Los errores se lanzan con códigos estables (room_not_found, room_not_open,
+-- room_full, invalid_username, invalid_email) que el cliente traduce a texto.
+-- Devuelve { room, participant } como JSON.
+create or replace function join_room(p_room_id text, p_username text, p_email text default null)
+returns json
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_room rooms%rowtype;
+  v_participant participants%rowtype;
+  v_username text := btrim(coalesce(p_username, ''));
+  v_email text := nullif(btrim(coalesce(p_email, '')), '');
+begin
+  if char_length(v_username) not between 3 and 10 then
+    raise exception 'invalid_username';
+  end if;
+  if v_email is not null and char_length(v_email) > 50 then
+    raise exception 'invalid_email';
+  end if;
+
+  select * into v_room from rooms where id = upper(p_room_id) for update;
+  if not found then
+    raise exception 'room_not_found';
+  end if;
+  if v_room.status <> 'open' then
+    raise exception 'room_not_open';
+  end if;
+  if (select count(*) from participants where room_id = v_room.id) >= 200 then
+    raise exception 'room_full';
+  end if;
+
+  insert into participants (room_id, username, email, score)
+  values (v_room.id, v_username, v_email, 0)
+  returning * into v_participant;
+
+  return json_build_object('room', row_to_json(v_room), 'participant', row_to_json(v_participant));
+end;
+$$;
+
+grant execute on function join_room(text, text, text) to anon, authenticated;
 
 -- Limpia los datos efímeros de una sala terminada: la selección de preguntas
 -- (room_questions) y las respuestas individuales (answers) de sus
